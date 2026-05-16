@@ -363,7 +363,7 @@ export function initDb() {
     trending_max_rug_ratio: 0.5,
     trending_max_bundler_rate: 0.7,
     position_size_sol: 0.05,
-    max_open_positions: 5,
+    max_open_positions: 10,
     tp_percent: 30,
     sl_percent: -15,
     trailing_enabled: true,
@@ -383,6 +383,13 @@ export function initDb() {
     db.prepare('UPDATE strategies SET enabled = 0').run();
     db.prepare("UPDATE strategies SET enabled = 1 WHERE id = 'degen'").run();
   }
+
+  // Migration: bump degen max_open_positions from 5 → 10 on existing DBs.
+  db.prepare(`
+    UPDATE strategies
+    SET config_json = json_set(config_json, '$.max_open_positions', 10)
+    WHERE id = 'degen' AND json_extract(config_json, '$.max_open_positions') < 10
+  `).run();
 }
 
 export function ensureColumn(table, column, ddl) {
