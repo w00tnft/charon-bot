@@ -237,6 +237,8 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
   };
 }
 
+const DRY_RUN_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+
 export async function monitorPositions() {
   const positions = openPositions();
   let walletPnlData = {};
@@ -253,5 +255,20 @@ export async function monitorPositions() {
       return null;
     });
     if (result?.exitReason) await sendPositionExit(result);
+
+    // Dry-run positions that can't be priced (dead token, no liquidity) are closed
+    // after 2 hours so they don't permanently block the max_open_positions gate.
+    if (!result && position.execution_mode !== 'live') {
+      const ageMs = now() - position.opened_at_ms;
+      if (ageMs >= DRY_RUN_TIMEOUT_MS) {
+        db.prepare(`
+          UPDATE dry_run_positions
+          SET status = 'closed', closed_at_ms = ?, exit_reason = 'DRY_RUN_TIMEOUT', pnl_percent = 0, pnl_sol = 0
+          WHERE id = ?
+        `).run(now(), position.id);
+        console.log(`[position] ${position.id} (${position.symbol || position.mint.slice(0, 8)}) auto-closed after ${Math.round(ageMs / 60000)}m — no price data`);
+        await sendPositionExit({ ...position, exitReason: 'DRY_RUN_TIMEOUT', pnlPercent: 0, pnl_percent: 0, pnlSol: 0, pnl_sol: 0 }).catch(() => {});
+      }
+    }
   }
 }
