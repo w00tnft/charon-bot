@@ -17,6 +17,46 @@ export async function sendTelegram(text, extra = {}) {
   });
 }
 
+export async function probeTelegram() {
+  const targets = [
+    { label: `TELEGRAM_CHAT_ID env (${TELEGRAM_CHAT_ID})`, id: TELEGRAM_CHAT_ID },
+    { label: '@FiferPigHouse (username)', id: '@FiferPigHouse' },
+  ];
+
+  // Deduplicate if env is already the username
+  const seen = new Set();
+  const unique = targets.filter(t => {
+    const k = String(t.id);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+
+  let succeeded = false;
+  for (const { label, id } of unique) {
+    try {
+      await bot.sendMessage(id, '✅ <b>Charon connected</b> — Telegram delivery confirmed.', {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+        ...(TELEGRAM_TOPIC_ID ? { message_thread_id: Number(TELEGRAM_TOPIC_ID) } : {}),
+      });
+      console.log(`[telegram] probe OK with ${label}`);
+      if (String(id) !== String(TELEGRAM_CHAT_ID)) {
+        console.log(`[telegram] ⚠️  Fix: set TELEGRAM_CHAT_ID=${id} in Railway`);
+      }
+      succeeded = true;
+      break;
+    } catch (err) {
+      const detail = err.response?.body || err.message;
+      console.log(`[telegram] probe FAILED for ${label}: ${typeof detail === 'object' ? JSON.stringify(detail) : detail}`);
+    }
+  }
+
+  if (!succeeded) {
+    console.log('[telegram] ⚠️  All probe targets failed. Check: bot is admin of channel, TELEGRAM_BOT_TOKEN is correct, channel exists.');
+  }
+}
+
 export async function sendCandidateAlert(candidateId, candidate, decision) {
   const sent = await sendTelegram(candidateSummary(candidate, decision), candidateButtons(candidateId, decision));
   db.prepare(`

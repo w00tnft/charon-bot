@@ -5,7 +5,7 @@ import { initLiveExecution } from './liveExecutor.js';
 import { setupTelegram } from './telegram/commands.js';
 import { monitorPositions } from './execution/positions.js';
 import { processCandidateFromSignals, maybeProcessDegenCandidate } from './pipeline/orchestrator.js';
-import { sendTelegram } from './telegram/send.js';
+import { sendTelegram, probeTelegram } from './telegram/send.js';
 import { makeFailureTracker } from './utils.js';
 
 setDefaultResultOrder('ipv4first');
@@ -15,6 +15,7 @@ export async function startCharon() {
   initDb();
   initLiveExecution();
   setupTelegram();
+  await probeTelegram();
 
   if (SIGNAL_SERVER_URL) {
     // ── Server mode: fetch signals from signal server ──────────────────────
