@@ -1,4 +1,5 @@
 import { bot } from '../telegram/bot.js';
+import { sendTelegram } from '../telegram/send.js';
 import { now, formatWindow, parseWindowMs } from '../utils.js';
 import { escapeHtml } from '../format.js';
 import { db } from '../db/connection.js';
@@ -16,6 +17,15 @@ export async function runLearning(chatId, windowArg = '12h') {
     parse_mode: 'HTML',
     disable_web_page_preview: true,
   });
+}
+
+export async function autoRunLearning(milestone) {
+  const windowMs = 12 * 60 * 60 * 1000;
+  const summary = summarizeLearningWindow(windowMs);
+  const { lessons, raw } = await generateLessons(summary);
+  const runId = storeLearningRun(windowMs, summary, lessons, raw);
+  await sendTelegram(`🧠 <b>Charon learning triggered</b> — reviewing last ${milestone} trades`);
+  await sendTelegram(learningReportText(runId, summary, lessons));
 }
 
 export async function sendLessons(chatId) {
