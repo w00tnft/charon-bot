@@ -108,8 +108,76 @@ export async function sendBatch(chatId, batchId) {
 
 export async function sendPositionOpen(positionId) {
   const position = db.prepare('SELECT * FROM dry_run_positions WHERE id = ?').get(positionId);
-  const label = position?.execution_mode === 'live' ? 'Live buy executed' : 'Dry-run buy stored';
-  if (position) await sendTelegram(`✅ <b>${label}</b>\n\n${formatPosition(position)}`, positionButtons(positionId));
+  if (!position) return;
+
+  const isDryRun = position.execution_mode !== 'live';
+  let snapshot = {};
+  try { snapshot = JSON.parse(position.snapshot_json || '{}'); } catch { /* */ }
+  const candidate = snapshot.candidate || {};
+  const safety = candidate.safety || {};
+  const signals = candidate.signals || {};
+  const metrics = candidate.metrics || {};
+  const token = candidate.token || {};
+
+  const safetyScore = safety.score ?? null;
+  const safetyPassed = safety.passed ?? true;
+  const deployerHistory = safety.deployerHistory || {};
+  const rugCount = deployerHistory.rugCount ?? 0;
+  const walletAgeDays = deployerHistory.walletAgeDays;
+
+  const safetyFlags = safety.flags || [];
+  const lpBurned = safetyFlags.some(f => /LP burned/i.test(f));
+  const mintRevoked = safetyFlags.some(f => /mint revoked/i.test(f));
+  const devMatch = safetyFlags.find(f => /dev holding ([\d.]+)%/i.test(f));
+  const devPct = devMatch ? Number(devMatch.match(/([\d.]+)%/)[1]) : null;
+  const top10Match = safetyFlags.find(f => /top10 holders ([\d.]+)%/i.test(f));
+  const top10Pct = top10Match ? Number(top10Match.match(/([\d.]+)%/)[1]) : null;
+
+  const srcCount = [signals.hasFeeClaim, signals.hasGraduated, signals.hasTrending].filter(Boolean).length;
+  const sourceLine = srcCount > 0
+    ? `${srcCount} signal${srcCount > 1 ? 's' : ''}`
+    : escapeHtml(signals.label || signals.route || 'unknown');
+
+  const stratId = position.strategy_id || snapshot.strategy || '';
+  const maxHoldMs = candidate.strategy?.max_hold_ms || snapshot.candidate?.filters?.strategy?.max_hold_ms || 0;
+  const maxHoldMin = position.max_hold_ms
+    ? Math.round(position.max_hold_ms / 60000)
+    : maxHoldMs ? Math.round(maxHoldMs / 60000) : null;
+
+  const symbol = escapeHtml(position.symbol || token.symbol || short(position.mint));
+  const header = isDryRun ? '⚡ <b>CHARON DRY-RUN SIGNAL</b>' : '⚡ <b>CHARON LIVE SIGNAL</b>';
+
+  const lines = [
+    header,
+    `🪙 Token: <b>$${symbol}</b>`,
+    `<code>${position.mint}</code>`,
+    `📊 McAp: <b>${fmtUsd(position.entry_mcap || metrics.marketCapUsd)}</b>`,
+    `🔗 Sources: <b>${sourceLine}</b>`,
+  ];
+
+  if (safetyScore !== null) {
+    const safetyIcon = safetyPassed ? '✅' : '⚠️';
+    lines.push(`🛡️ Safety Score: <b>${safetyScore}/100 ${safetyIcon}</b>`);
+    const details = [];
+    details.push(`Deployer: ${rugCount === 0 ? 'Clean (0 rugs) ✅' : `${rugCount} rug${rugCount !== 1 ? 's' : ''} ⚠️`}${walletAgeDays != null ? ` · ${walletAgeDays}d old` : ''}`);
+    details.push(`LP: ${lpBurned ? 'Burned ✅' : 'Not burned ⚠️'}`);
+    details.push(`Mint: ${mintRevoked ? 'Revoked ✅' : 'Not revoked ⚠️'}`);
+    if (devPct != null) details.push(`Dev Holding: ${devPct}%${devPct > 10 ? ' ⚠️' : ' ✅'}`);
+    if (top10Pct != null) details.push(`Top 10: ${top10Pct}%${top10Pct > 30 ? ' ⚠️' : ' ✅'}`);
+    details.forEach((d, i) => lines.push(`${i === details.length - 1 ? '└' : '├'} ${d}`));
+  }
+
+  lines.push(`📈 Strategy: <b>${escapeHtml(stratId || 'degen')}</b>`);
+  if (maxHoldMin) lines.push(`⏱️ Max Hold: <b>${maxHoldMin} min</b>`);
+  lines.push(`🎯 Target: <b>+${position.tp_percent}%</b>`);
+  lines.push(`🛑 Stop Loss: <b>${position.sl_percent}%</b>`);
+
+  const gmgnUrl = token.gmgnUrl || gmgnLink(position.mint);
+  const twitterHandle = token.twitter ? token.twitter.replace(/^@/, '') : null;
+  const buttons = [[{ text: '📈 Chart', url: gmgnUrl }]];
+  if (twitterHandle) buttons[0].push({ text: '🐦 Twitter', url: `https://twitter.com/${twitterHandle}` });
+
+  await sendTelegram(lines.join('\n'), { reply_markup: { inline_keyboard: buttons } });
 }
 
 export async function sendPositionExit(position) {
