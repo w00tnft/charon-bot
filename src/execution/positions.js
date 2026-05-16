@@ -1,5 +1,5 @@
 import { now, json } from '../utils.js';
-import { numSetting, boolSetting, strategyById } from '../db/settings.js';
+import { numSetting, boolSetting, strategyById, setSetting } from '../db/settings.js';
 import { db } from '../db/connection.js';
 import { firstPositiveNumber, marketCapFromGmgn, tokenPriceFromGmgn } from '../utils.js';
 import { fetchGmgnTokenInfo } from '../enrichment/gmgn.js';
@@ -12,6 +12,7 @@ import { updateCandidateSnapshot } from '../db/candidates.js';
 import { trending } from '../signals/trending.js';
 import { executeLiveSell } from './router.js';
 import { sendPositionExit } from '../telegram/send.js';
+import { autoRunLearning } from '../learning/commands.js';
 
 export async function freshEntryMarket(mint, candidate) {
   const gmgn = await fetchGmgnTokenInfo(mint, false);
@@ -239,6 +240,18 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
 
 const DRY_RUN_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 
+async function maybeAutoLearn() {
+  const { count: total } = db.prepare("SELECT COUNT(*) AS count FROM dry_run_positions WHERE status = 'closed'").get();
+  if (total === 0) return;
+  const milestone = Math.floor(total / 25) * 25;
+  if (milestone === 0) return;
+  const last = numSetting('last_auto_learn_count', 0);
+  if (milestone <= last) return;
+  setSetting('last_auto_learn_count', milestone);
+  console.log(`[learning] auto-triggered at ${total} closed positions`);
+  await autoRunLearning(milestone);
+}
+
 export async function monitorPositions() {
   const positions = openPositions();
   let walletPnlData = {};
@@ -246,6 +259,7 @@ export async function monitorPositions() {
   if (pubkey && positions.some(p => p.execution_mode === 'live')) {
     walletPnlData = await fetchJupiterWalletPnl(pubkey);
   }
+  let anyExit = false;
   for (const position of positions) {
     const jupiterPnl = position.execution_mode === 'live'
       ? (walletPnlData[position.mint]?.pnl || null)
@@ -254,7 +268,10 @@ export async function monitorPositions() {
       console.log(`[position] ${position.id} ${err.message}`);
       return null;
     });
-    if (result?.exitReason) await sendPositionExit(result);
+    if (result?.exitReason) {
+      await sendPositionExit(result);
+      anyExit = true;
+    }
 
     // Dry-run positions that can't be priced (dead token, no liquidity) are closed
     // after 2 hours so they don't permanently block the max_open_positions gate.
@@ -268,7 +285,9 @@ export async function monitorPositions() {
         `).run(now(), position.id);
         console.log(`[position] ${position.id} (${position.symbol || position.mint.slice(0, 8)}) auto-closed after ${Math.round(ageMs / 60000)}m — no price data`);
         await sendPositionExit({ ...position, exitReason: 'DRY_RUN_TIMEOUT', pnlPercent: 0, pnl_percent: 0, pnlSol: 0, pnl_sol: 0 }).catch(() => {});
+        anyExit = true;
       }
     }
   }
+  if (anyExit) await maybeAutoLearn().catch(err => console.log(`[learning] auto-trigger error: ${err.message}`));
 }
