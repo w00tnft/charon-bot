@@ -1,4 +1,4 @@
-import { GMGN_ENABLED, LPAGENT_URL } from './config.js';
+import { GMGN_ENABLED, LPAGENT_API_KEY, LPAGENT_BASE_URL } from './config.js';
 import { gmgnFetch, gmgnBackoffActive } from './enrichment/gmgn.js';
 import { now } from './utils.js';
 
@@ -6,11 +6,11 @@ const deployerCache = new Map();
 const DEPLOYER_CACHE_MAX = 200;
 const DEPLOYER_CACHE_TTL_MS = 60 * 60 * 1000;
 
-async function fetchWithTimeout(url, timeoutMs = 4000) {
+async function fetchWithTimeout(url, options = {}, timeoutMs = 4000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { signal: controller.signal });
+    const res = await fetch(url, { ...options, signal: controller.signal });
     clearTimeout(timer);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
@@ -21,10 +21,16 @@ async function fetchWithTimeout(url, timeoutMs = 4000) {
 }
 
 async function enrichFromLpAgent(walletAddress) {
-  if (!LPAGENT_URL || !walletAddress) return null;
+  if (!LPAGENT_API_KEY || !walletAddress) return null;
   try {
-    const data = await fetchWithTimeout(`${LPAGENT_URL}/wallet/${walletAddress}`, 3000);
-    return data || null;
+    const url = `${LPAGENT_BASE_URL}/lp-positions/opening?owner=${walletAddress}`;
+    const data = await fetchWithTimeout(url, { headers: { 'x-api-key': LPAGENT_API_KEY } }, 3000);
+    const positions = data?.data || [];
+    if (!Array.isArray(positions) || positions.length === 0) return null;
+    const rugCount = positions.filter(p => p.is_rug === true || Number(p.rug_ratio ?? 0) > 0.9).length;
+    const walletAgeDays = data?.wallet_age_days ?? null;
+    const previousTokens = positions.length;
+    return { walletAgeDays, previousTokens, rugCount };
   } catch {
     return null;
   }
