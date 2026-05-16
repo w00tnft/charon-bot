@@ -3,7 +3,7 @@ import { TELEGRAM_CHAT_ID, TELEGRAM_TOPIC_ID } from '../config.js';
 import { now, json } from '../utils.js';
 import { db } from '../db/connection.js';
 import { escapeHtml, fmtPct, fmtSol, fmtUsd, short, gmgnLink } from '../format.js';
-import { numSetting } from '../db/settings.js';
+import { numSetting, strategyById } from '../db/settings.js';
 import { candidateSummary, compactCandidateLine, batchRevealSummary, formatPosition } from './format.js';
 import { candidateButtons, batchRevealButtons, positionButtons, intentButtons } from './menus.js';
 import { batchById } from '../db/decisions.js';
@@ -139,10 +139,7 @@ export async function sendPositionOpen(positionId) {
     : escapeHtml(signals.label || signals.route || 'unknown');
 
   const stratId = position.strategy_id || snapshot.strategy || '';
-  const maxHoldMs = candidate.strategy?.max_hold_ms || snapshot.candidate?.filters?.strategy?.max_hold_ms || 0;
-  const maxHoldMin = position.max_hold_ms
-    ? Math.round(position.max_hold_ms / 60000)
-    : maxHoldMs ? Math.round(maxHoldMs / 60000) : null;
+  const strat = strategyById(stratId) || {};
 
   const symbol = escapeHtml(position.symbol || token.symbol || short(position.mint));
   const header = isDryRun ? '⚡ <b>CHARON DRY-RUN SIGNAL</b>' : '⚡ <b>CHARON LIVE SIGNAL</b>';
@@ -171,9 +168,26 @@ export async function sendPositionOpen(positionId) {
 
   lines.push('');
   lines.push(`📈 Strategy: <b>${escapeHtml(stratId || 'degen')}</b>`);
-  if (maxHoldMin) lines.push(`⏱️ Max Hold: <b>${maxHoldMin} min</b>`);
-  lines.push(`🎯 Target: <b>+${position.tp_percent}%</b>`);
-  lines.push(`🛑 Stop Loss: <b>${position.sl_percent}%</b>`);
+
+  if (strat.partial_exit_pct != null) {
+    // New partial-exit + trailing-stop system
+    const exitPct = strat.partial_exit_pct ?? 30;
+    const exitSize = Math.round((strat.partial_exit_size ?? 0.60) * 100);
+    const trailPct = strat.trailing_stop_pct ?? 20;
+    const hardPct = strat.hard_stop_pct ?? 25;
+    const maxHoldMin = strat.max_hold_ms ? Math.round(strat.max_hold_ms / 60000) : null;
+    lines.push(`💰 Partial Exit: <b>+${exitPct}% → sell ${exitSize}%</b>`);
+    lines.push(`🔔 Trailing Stop: <b>−${trailPct}% from ATH</b>`);
+    lines.push(`🛑 Hard Stop: <b>−${hardPct}% from entry</b>`);
+    if (maxHoldMin) lines.push(`⏱️ Max Hold: <b>${maxHoldMin} min</b>`);
+  } else {
+    // Legacy fixed TP/SL system
+    const maxHoldMs = strat.max_hold_ms || 0;
+    const maxHoldMin = maxHoldMs ? Math.round(maxHoldMs / 60000) : null;
+    if (maxHoldMin) lines.push(`⏱️ Max Hold: <b>${maxHoldMin} min</b>`);
+    lines.push(`🎯 Target: <b>+${position.tp_percent}%</b>`);
+    lines.push(`🛑 Stop Loss: <b>${position.sl_percent}%</b>`);
+  }
 
   const gmgnUrl = token.gmgnUrl || gmgnLink(position.mint);
   const twitterHandle = token.twitter ? token.twitter.replace(/^@/, '') : null;
