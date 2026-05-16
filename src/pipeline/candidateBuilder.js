@@ -5,6 +5,7 @@ import { fetchJupiterAsset, fetchJupiterHolders, fetchJupiterChartContext } from
 import { fetchSavedWalletExposure } from '../enrichment/wallets.js';
 import { fetchTwitterNarrative } from '../enrichment/twitter.js';
 import { gmgnLink } from '../format.js';
+import { calculateSafetyScore, checkDeployerHistory } from '../safety.js';
 
 export function buildFeeSnapshot(fee, signature) {
   return {
@@ -83,6 +84,14 @@ export function filterCandidate(candidate) {
   // Saved wallet holders
   if (strat.min_saved_wallet_holders > 0 && savedCount < strat.min_saved_wallet_holders) {
     failures.push(`saved wallet holders: ${savedCount} < ${strat.min_saved_wallet_holders}`);
+  }
+
+  // Safety score
+  if (strat.min_safety_score > 0 && candidate.safety) {
+    const { score, passed } = candidate.safety;
+    if (!passed || score < strat.min_safety_score) {
+      failures.push(`safety score: ${score}/100 < min ${strat.min_safety_score}`);
+    }
   }
 
   // ATH distance (dip buy strategy)
@@ -186,6 +195,27 @@ export async function buildCandidate({ mint, fee = null, signature = null, gradu
     twitterNarrative,
     createdAtMs: now(),
   };
+
+  // Deployer address — best-effort from available enrichment data
+  const deployerAddress = gmgn?.creator_address
+    || gmgn?.deployer_address
+    || gmgn?.owner
+    || jupiterAsset?.creatorAddress
+    || null;
+  candidate.token.deployerAddress = deployerAddress;
+
+  // Safety scoring (fail-safe: never throws, always produces a result)
+  const deployerHistory = await checkDeployerHistory(deployerAddress).catch(() => null);
+  candidate.safety = {
+    ...calculateSafetyScore(candidate, deployerHistory),
+    deployerHistory,
+    deployerAddress,
+  };
+
+  const safetyIcon = candidate.safety.passed ? '✅' : '❌';
+  const topFlags = candidate.safety.flags.slice(0, 3).join(', ');
+  console.log(`[safety] ${candidate.token.symbol || mint.slice(0, 8)} score: ${candidate.safety.score}/100 ${safetyIcon}${topFlags ? ` — ${topFlags}` : ''}`);
+
   candidate.filters = filterCandidate(candidate);
   return candidate;
 }

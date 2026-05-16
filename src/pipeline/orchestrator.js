@@ -1,4 +1,5 @@
 import { now, pruneSeen } from '../utils.js';
+import { db } from '../db/connection.js';
 import { numSetting, boolSetting } from '../db/settings.js';
 import { upsertCandidate, updateCandidateStatus, recentEligibleCandidates, candidateById } from '../db/candidates.js';
 import { storeDecision, storeBatchDecision, logDecisionEvent } from '../db/decisions.js';
@@ -153,6 +154,29 @@ export async function handleApprovedBuy(selectedRow, decision, batchId, rows = [
 
   if (mode === 'dry_run') {
     const strat = activeStrategy();
+    const deployerAddr = freshSelectedRow.candidate.token?.deployerAddress || null;
+    if (deployerAddr) {
+      const deployerConflict = db.prepare(`
+        SELECT id FROM dry_run_positions
+        WHERE status = 'open'
+        AND json_extract(snapshot_json, '$.candidate.token.deployerAddress') = ?
+        LIMIT 1
+      `).get(deployerAddr);
+      if (deployerConflict) {
+        console.log(`[agent] deployer duplicate skipped: ${deployerAddr.slice(0, 8)}... already has open position #${deployerConflict.id}`);
+        logDecisionEvent({
+          batchId,
+          triggerCandidateId,
+          selectedRow: freshSelectedRow,
+          rows: executionRows,
+          decision,
+          mode,
+          action: 'dry_run_deployer_duplicate_skipped',
+          guardrails: { deployerAddress: deployerAddr, conflictPositionId: deployerConflict.id },
+        });
+        return;
+      }
+    }
     const { id: positionId, isNew } = createDryRunPosition(freshSelectedRow.id, freshSelectedRow.candidate, decision, `llm_batch_${batchId}`);
     logDecisionEvent({
       batchId,

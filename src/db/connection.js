@@ -346,11 +346,11 @@ export function initDb() {
 
   stratInsert.run('degen', 'Degen', 1, JSON.stringify({
     entry_mode: 'immediate',
-    min_source_count: 1,
+    min_source_count: 2,
     require_fee_claim: false,
     token_age_max_ms: 3600000,
-    min_mcap_usd: 5000,
-    max_mcap_usd: 100000,
+    min_mcap_usd: 8000,
+    max_mcap_usd: 80000,
     min_fee_claim_sol: 0,
     min_gmgn_total_fee_sol: 0,
     min_holders: 0,
@@ -360,36 +360,54 @@ export function initDb() {
     min_graduated_volume_usd: 0,
     trending_min_volume_usd: 0,
     trending_min_swaps: 0,
-    trending_max_rug_ratio: 0.5,
-    trending_max_bundler_rate: 0.7,
+    trending_max_rug_ratio: 0.25,
+    trending_max_bundler_rate: 0.25,
     position_size_sol: 0.05,
-    max_open_positions: 10,
-    tp_percent: 30,
-    sl_percent: -15,
+    max_open_positions: 3,
+    tp_percent: 150,
+    sl_percent: -30,
     trailing_enabled: true,
-    trailing_percent: 10,
-    partial_tp: false,
-    partial_tp_at_percent: 0,
-    partial_tp_sell_percent: 0,
-    max_hold_ms: 0,
+    trailing_percent: 20,
+    partial_tp: true,
+    partial_tp_at_percent: 100,
+    partial_tp_sell_percent: 50,
+    max_hold_ms: 1200000,
     use_llm: false,
     llm_min_confidence: 0,
+    min_safety_score: 65,
   }), ts);
 
-  // Migration: if sniper is still the active strategy (factory default or old DB),
-  // switch to degen. Preserves explicit user switches to dip_buy / smart_money.
+  // ── Migrations (run on every startup, idempotent) ────────────────────────
+
+  // Ensure degen is active when sniper is the only enabled strategy (old DB default).
   const active = db.prepare('SELECT id FROM strategies WHERE enabled = 1').get();
   if (!active || active.id === 'sniper') {
     db.prepare('UPDATE strategies SET enabled = 0').run();
     db.prepare("UPDATE strategies SET enabled = 1 WHERE id = 'degen'").run();
   }
 
-  // Migration: bump degen max_open_positions from 5 → 10 on existing DBs.
-  db.prepare(`
-    UPDATE strategies
-    SET config_json = json_set(config_json, '$.max_open_positions', 10)
-    WHERE id = 'degen' AND json_extract(config_json, '$.max_open_positions') < 10
-  `).run();
+  // Apply all current degen settings to existing DBs (INSERT OR IGNORE won't update them).
+  const degenMigrations = {
+    min_source_count: 2,
+    min_mcap_usd: 8000,
+    max_mcap_usd: 80000,
+    trending_max_rug_ratio: 0.25,
+    trending_max_bundler_rate: 0.25,
+    max_open_positions: 3,
+    tp_percent: 150,
+    sl_percent: -30,
+    trailing_enabled: 1,
+    trailing_percent: 20,
+    partial_tp: 1,
+    partial_tp_at_percent: 100,
+    partial_tp_sell_percent: 50,
+    max_hold_ms: 1200000,
+    min_safety_score: 65,
+  };
+  const degenMigrationSql = Object.entries(degenMigrations)
+    .map(([k, v]) => `json_set(config_json, '$.${k}', ${typeof v === 'number' ? v : `'${v}'`})`)
+    .reduce((acc, expr) => `${expr.replace('config_json', acc)}`);
+  db.prepare(`UPDATE strategies SET config_json = ${degenMigrationSql} WHERE id = 'degen'`).run();
 }
 
 export function ensureColumn(table, column, ddl) {
