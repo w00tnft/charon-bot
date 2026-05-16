@@ -375,6 +375,14 @@ export function initDb() {
     use_llm: false,
     llm_min_confidence: 0,
   }), ts);
+
+  // Migration: if sniper is still the active strategy (factory default or old DB),
+  // switch to degen. Preserves explicit user switches to dip_buy / smart_money.
+  const active = db.prepare('SELECT id FROM strategies WHERE enabled = 1').get();
+  if (!active || active.id === 'sniper') {
+    db.prepare('UPDATE strategies SET enabled = 0').run();
+    db.prepare("UPDATE strategies SET enabled = 1 WHERE id = 'degen'").run();
+  }
 }
 
 export function ensureColumn(table, column, ddl) {
