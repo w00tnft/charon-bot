@@ -198,6 +198,14 @@ export function initDb() {
     CREATE INDEX IF NOT EXISTS idx_decision_logs_mint ON decision_logs(selected_mint);
     CREATE INDEX IF NOT EXISTS idx_signal_events_mint ON signal_events(mint);
     CREATE INDEX IF NOT EXISTS idx_learning_lessons_status ON learning_lessons(status, created_at_ms);
+    CREATE TABLE IF NOT EXISTS route_weights (
+      route TEXT PRIMARY KEY,
+      win_count INTEGER DEFAULT 0,
+      loss_count INTEGER DEFAULT 0,
+      avg_pnl_pct REAL DEFAULT 0,
+      weight REAL DEFAULT 1.0,
+      updated_at_ms INTEGER NOT NULL
+    );
   `);
   ensureColumn('candidates', 'signal_key', 'TEXT');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_candidates_signal_key ON candidates(signal_key) WHERE signal_key IS NOT NULL');
@@ -208,6 +216,11 @@ export function initDb() {
   ensureColumn('dry_run_positions', 'strategy_id', "TEXT DEFAULT 'sniper'");
   ensureColumn('dry_run_positions', 'partial_tp_done', 'INTEGER DEFAULT 0');
   ensureColumn('decision_logs', 'strategy_id', 'TEXT');
+
+  const weightInsert = db.prepare('INSERT OR IGNORE INTO route_weights (route, win_count, loss_count, avg_pnl_pct, weight, updated_at_ms) VALUES (?, 0, 0, 0, 1.0, ?)');
+  for (const route of ['fee_claim', 'graduated', 'trending', 'multi_source', 'single_source']) {
+    weightInsert.run(route, Date.now());
+  }
 
   const defaults = {
     agent_enabled: 'true',
