@@ -7,6 +7,7 @@ import { fetchTwitterNarrative } from '../enrichment/twitter.js';
 import { gmgnLink } from '../format.js';
 import { calculateSafetyScore, checkDeployerHistory } from '../safety.js';
 import { getRouteWeight, toCanonicalRoute } from '../learning/weights.js';
+import { isBlacklisted, isWhitelisted } from '../db/blacklist.js';
 
 export function buildFeeSnapshot(fee, signature) {
   return {
@@ -32,6 +33,20 @@ export function signalLabel(signals = {}) {
 export function filterCandidate(candidate) {
   const strat = activeStrategy();
   const failures = [];
+  const sym = candidate.token?.symbol || candidate.token?.mint?.slice(0, 8) || '?';
+
+  // Blacklist checks — early return, no further enrichment needed
+  const blMint = isBlacklisted(candidate.token?.mint, null);
+  if (blMint) {
+    console.log(`[blacklist] $${sym} skipped — rug blacklisted`);
+    return { passed: false, failures: ['blacklisted: rug'], strategy: strat.id };
+  }
+  const deployerAddr = candidate.token?.deployerAddress || candidate.safety?.deployerAddress;
+  const blDeployer = isBlacklisted(null, deployerAddr);
+  if (blDeployer) {
+    console.log(`[blacklist] $${sym} skipped — deployer banned`);
+    return { passed: false, failures: ['blacklisted: deployer banned'], strategy: strat.id };
+  }
   const mcap = candidate.metrics.marketCapUsd;
   const totalFees = candidate.metrics.gmgnTotalFeesSol;
   const gradVolume = candidate.metrics.graduatedVolumeUsd;
@@ -220,6 +235,14 @@ export async function buildCandidate({ mint, fee = null, signature = null, gradu
     const weightedScore = Math.min(100, Math.round(rawScore * routeWeight));
     candidate.safety = { ...candidate.safety, score: weightedScore, passed: weightedScore >= 65, routeWeight };
     console.log(`[weights] ${toCanonicalRoute(signalRoute)} ${routeWeight.toFixed(2)}x → score ${rawScore} → ${weightedScore}`);
+  }
+
+  // Whitelist deployer bonus (+15)
+  if (deployerAddress && isWhitelisted(deployerAddress)) {
+    const sym = candidate.token.symbol || mint.slice(0, 8);
+    const boostedScore = Math.min(100, candidate.safety.score + 15);
+    candidate.safety = { ...candidate.safety, score: boostedScore, passed: boostedScore >= 65 };
+    console.log(`[whitelist] $${sym} boosted +15 → score ${boostedScore} — known winner deployer`);
   }
 
   const safetyIcon = candidate.safety.passed ? '✅' : '❌';
