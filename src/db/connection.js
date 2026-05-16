@@ -216,6 +216,7 @@ export function initDb() {
   ensureColumn('dry_run_positions', 'strategy_id', "TEXT DEFAULT 'sniper'");
   ensureColumn('dry_run_positions', 'partial_tp_done', 'INTEGER DEFAULT 0');
   ensureColumn('dry_run_positions', 'partial_exit_notified', 'INTEGER DEFAULT 0');
+  ensureColumn('dry_run_positions', 'exit_class', 'TEXT');
   ensureColumn('decision_logs', 'strategy_id', 'TEXT');
 
   const weightInsert = db.prepare('INSERT OR IGNORE INTO route_weights (route, win_count, loss_count, avg_pnl_pct, weight, updated_at_ms) VALUES (?, 0, 0, 0, 1.0, ?)');
