@@ -248,7 +248,7 @@ export function initDb() {
   const stratInsert = db.prepare('INSERT OR IGNORE INTO strategies (id, name, enabled, config_json, created_at_ms) VALUES (?, ?, ?, ?, ?)');
   const ts = Date.now();
 
-  stratInsert.run('sniper', 'Sniper', 1, JSON.stringify({
+  stratInsert.run('sniper', 'Sniper', 0, JSON.stringify({
     entry_mode: 'immediate',
     min_source_count: 2,
     require_fee_claim: true,
@@ -344,7 +344,7 @@ export function initDb() {
     llm_min_confidence: 70,
   }), ts);
 
-  stratInsert.run('degen', 'Degen', 0, JSON.stringify({
+  stratInsert.run('degen', 'Degen', 1, JSON.stringify({
     entry_mode: 'immediate',
     min_source_count: 1,
     require_fee_claim: false,
