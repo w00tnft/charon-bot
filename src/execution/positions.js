@@ -11,7 +11,7 @@ import { openPositions } from '../db/positions.js';
 import { updateCandidateSnapshot } from '../db/candidates.js';
 import { trending } from '../signals/trending.js';
 import { executeLiveSell } from './router.js';
-import { sendPositionExit } from '../telegram/send.js';
+import { sendPositionExit, sendPartialExit } from '../telegram/send.js';
 import { autoRunLearning } from '../learning/commands.js';
 
 export async function freshEntryMarket(mint, candidate) {
@@ -108,6 +108,16 @@ export async function refreshCandidateForExecution(row) {
 
 const sellInProgress = new Set();
 
+async function doLiveSell(position, reason, price, mcap) {
+  if (sellInProgress.has(position.id)) return null;
+  sellInProgress.add(position.id);
+  try {
+    return await executeLiveSell(position, reason);
+  } finally {
+    sellInProgress.delete(position.id);
+  }
+}
+
 export async function refreshPosition(position, { autoExit = true, jupiterPnl = null } = {}) {
   const asset = await fetchJupiterAsset(position.mint);
   const price = firstPositiveNumber(asset?.usdPrice, position.high_water_price, position.entry_price);
@@ -123,71 +133,125 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
     pnlPercent = Number(jupiterPnl.totalPnlPercentageNative);
     pnlSol = Number.isFinite(Number(jupiterPnl.totalPnlNative)) ? Number(jupiterPnl.totalPnlNative) : pnlSol;
   }
-  const tpHit = pnlPercent >= Number(position.tp_percent);
-  const slHit = pnlPercent <= Number(position.sl_percent);
-  const trailingArmed = position.trailing_armed || (position.trailing_enabled && tpHit);
-  const trailDrop = highWaterMcap > 0 ? (Number(mcap) / highWaterMcap - 1) * 100 : 0;
-  const trailingHit = trailingArmed && position.trailing_enabled && trailDrop <= -Math.abs(Number(position.trailing_percent));
+
+  const strat = strategyById(position.strategy_id);
   let exitReason = null;
   let closed = false;
+  let partialFired = false;
 
-  // Max hold time check
-  const strat = strategyById(position.strategy_id);
-  if (strat?.max_hold_ms > 0 && (now() - position.opened_at_ms) >= strat.max_hold_ms) {
-    exitReason = 'MAX_HOLD';
-  }
+  // ── New partial-exit + trailing-stop system ────────────────────────────────
+  if (strat?.partial_exit_pct != null) {
+    const partialExitPct = strat.partial_exit_pct;
+    const partialExitSize = strat.partial_exit_size ?? 0.60;
+    const trailingStopPct = strat.trailing_stop_pct ?? 20;
+    const hardStopPct = Math.abs(strat.hard_stop_pct ?? 25);
+    const maxHoldMs = strat.max_hold_ms ?? 0;
+    const partialDone = Boolean(position.partial_tp_done);
 
-  // Partial TP check
-  if (!exitReason && strat?.partial_tp && !position.partial_tp_done && pnlPercent >= strat.partial_tp_at_percent) {
-    db.prepare('UPDATE dry_run_positions SET partial_tp_done = 1 WHERE id = ?').run(position.id);
-    console.log(`[position] ${position.id} partial TP at ${pnlPercent.toFixed(1)}% (${strat.partial_tp_sell_percent}% sell)`);
-    if (position.execution_mode === 'live' && position.token_amount_raw) {
-      try {
-        const sellAmount = Math.floor(Number(position.token_amount_raw) * (strat.partial_tp_sell_percent / 100));
-        if (sellAmount > 0) {
-          const sell = await executeLiveSell({ ...position, token_amount_raw: String(sellAmount) }, 'PARTIAL_TP');
-          const remaining = Number(position.token_amount_raw) - sellAmount;
-          db.prepare('UPDATE dry_run_positions SET token_amount_raw = ? WHERE id = ?').run(String(remaining), position.id);
-          db.prepare(`
-            INSERT INTO dry_run_trades (position_id, mint, side, at_ms, price, mcap, size_sol, token_amount_est, reason, payload_json)
-            VALUES (?, ?, 'sell', ?, ?, ?, ?, ?, 'PARTIAL_TP', ?)
-          `).run(position.id, position.mint, now(), price, mcap,
-            position.size_sol * (strat.partial_tp_sell_percent / 100), sellAmount,
-            json({ pnlPercent, sell, partialSellPercent: strat.partial_tp_sell_percent, remaining }));
-          console.log(`[position] ${position.id} partial TP sold ${sellAmount} tokens, ${remaining} remaining`);
+    db.prepare('UPDATE dry_run_positions SET high_water_mcap = ?, high_water_price = ? WHERE id = ?')
+      .run(highWaterMcap, highWaterPrice, position.id);
+
+    // Max hold (checked first — clean exit even in profit)
+    if (!exitReason && maxHoldMs > 0 && (now() - position.opened_at_ms) >= maxHoldMs) {
+      exitReason = 'MAX_HOLD';
+    }
+
+    // Hard SL (always active, even after partial exit)
+    if (!exitReason && pnlPercent <= -hardStopPct) {
+      exitReason = 'HARD_SL';
+    }
+
+    // Partial exit (phase 1 — fire once when +partial_exit_pct% reached)
+    if (!exitReason && !partialDone && pnlPercent >= partialExitPct) {
+      db.prepare('UPDATE dry_run_positions SET partial_tp_done = 1 WHERE id = ?').run(position.id);
+      console.log(`[position] ${position.id} partial exit at ${pnlPercent.toFixed(1)}% (${Math.round(partialExitSize * 100)}% sell)`);
+      partialFired = true;
+
+      if (position.execution_mode === 'live' && position.token_amount_raw) {
+        try {
+          const sellAmount = Math.floor(Number(position.token_amount_raw) * partialExitSize);
+          if (sellAmount > 0) {
+            const sell = await doLiveSell({ ...position, token_amount_raw: String(sellAmount) }, 'PARTIAL_EXIT', price, mcap);
+            if (sell) {
+              const remaining = Number(position.token_amount_raw) - sellAmount;
+              db.prepare('UPDATE dry_run_positions SET token_amount_raw = ? WHERE id = ?').run(String(remaining), position.id);
+              db.prepare(`
+                INSERT INTO dry_run_trades (position_id, mint, side, at_ms, price, mcap, size_sol, token_amount_est, reason, payload_json)
+                VALUES (?, ?, 'sell', ?, ?, ?, ?, ?, 'PARTIAL_EXIT', ?)
+              `).run(position.id, position.mint, now(), price, mcap,
+                position.size_sol * partialExitSize, sellAmount,
+                json({ pnlPercent, partialExitSize, remaining }));
+            }
+          }
+        } catch (err) {
+          console.log(`[position] ${position.id} partial sell failed: ${err.message}`);
         }
-      } catch (err) {
-        console.log(`[position] ${position.id} partial sell failed: ${err.message}`);
       }
     }
+
+    // Trailing stop (phase 2 — only active after partial exit)
+    if (!exitReason && (partialDone || partialFired)) {
+      const trailingStopMcap = highWaterMcap * (1 - trailingStopPct / 100);
+      if (Number(mcap) <= trailingStopMcap) {
+        exitReason = 'TRAILING_STOP';
+      }
+    }
+
+  // ── Legacy fixed TP/SL system (sniper, dip_buy, smart_money) ──────────────
+  } else {
+    const tpHit = pnlPercent >= Number(position.tp_percent);
+    const slHit = pnlPercent <= Number(position.sl_percent);
+    const trailingArmed = position.trailing_armed || (position.trailing_enabled && tpHit);
+    const trailDrop = highWaterMcap > 0 ? (Number(mcap) / highWaterMcap - 1) * 100 : 0;
+    const trailingHit = trailingArmed && position.trailing_enabled && trailDrop <= -Math.abs(Number(position.trailing_percent));
+
+    if (strat?.max_hold_ms > 0 && (now() - position.opened_at_ms) >= strat.max_hold_ms) {
+      exitReason = 'MAX_HOLD';
+    }
+    if (!exitReason && strat?.partial_tp && !position.partial_tp_done && pnlPercent >= strat.partial_tp_at_percent) {
+      db.prepare('UPDATE dry_run_positions SET partial_tp_done = 1 WHERE id = ?').run(position.id);
+      console.log(`[position] ${position.id} partial TP at ${pnlPercent.toFixed(1)}%`);
+      if (position.execution_mode === 'live' && position.token_amount_raw) {
+        try {
+          const sellAmount = Math.floor(Number(position.token_amount_raw) * (strat.partial_tp_sell_percent / 100));
+          if (sellAmount > 0) {
+            const sell = await doLiveSell({ ...position, token_amount_raw: String(sellAmount) }, 'PARTIAL_TP', price, mcap);
+            if (sell) {
+              const remaining = Number(position.token_amount_raw) - sellAmount;
+              db.prepare('UPDATE dry_run_positions SET token_amount_raw = ? WHERE id = ?').run(String(remaining), position.id);
+              db.prepare(`
+                INSERT INTO dry_run_trades (position_id, mint, side, at_ms, price, mcap, size_sol, token_amount_est, reason, payload_json)
+                VALUES (?, ?, 'sell', ?, ?, ?, ?, ?, 'PARTIAL_TP', ?)
+              `).run(position.id, position.mint, now(), price, mcap,
+                position.size_sol * (strat.partial_tp_sell_percent / 100), sellAmount,
+                json({ pnlPercent, partialSellPercent: strat.partial_tp_sell_percent, remaining }));
+            }
+          }
+        } catch (err) {
+          console.log(`[position] ${position.id} partial sell failed: ${err.message}`);
+        }
+      }
+    }
+    if (!exitReason) {
+      if (slHit) exitReason = 'SL';
+      else if (tpHit && !position.trailing_enabled) exitReason = 'TP';
+      else if (trailingHit) exitReason = 'TRAILING_TP';
+    }
+
+    db.prepare(`
+      UPDATE dry_run_positions
+      SET high_water_mcap = ?, high_water_price = ?, trailing_armed = ?
+      WHERE id = ?
+    `).run(highWaterMcap, highWaterPrice, trailingArmed ? 1 : 0, position.id);
   }
 
-  // Standard exit checks
-  if (!exitReason) {
-    if (slHit) exitReason = 'SL';
-    else if (tpHit && !position.trailing_enabled) exitReason = 'TP';
-    else if (trailingHit) exitReason = 'TRAILING_TP';
-  }
-
-  // Live exits will override these with realized SOL values
+  // ── Execute exit ───────────────────────────────────────────────────────────
   let finalPnlPercent = pnlPercent;
   let finalPnlSol = pnlSol;
 
-  db.prepare(`
-    UPDATE dry_run_positions
-    SET high_water_mcap = ?, high_water_price = ?, trailing_armed = ?
-    WHERE id = ?
-  `).run(highWaterMcap, highWaterPrice, trailingArmed ? 1 : 0, position.id);
-
   if (exitReason && autoExit && position.execution_mode === 'live') {
-    if (sellInProgress.has(position.id)) return { ...position, exitReason: null };
-    sellInProgress.add(position.id);
-    let sell;
-    try {
-      sell = await executeLiveSell(position, exitReason);
-    } finally {
-      sellInProgress.delete(position.id);
-    }
+    const sell = await doLiveSell(position, exitReason, price, mcap);
+    if (!sell) return { ...position, exitReason: null };
     const receivedLamports = Number(sell.outputAmount || 0);
     const receivedSol = receivedLamports > 0 ? receivedLamports / 1_000_000_000 : null;
     if (receivedSol != null) {
@@ -203,7 +267,8 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
     db.prepare(`
       INSERT INTO dry_run_trades (position_id, mint, side, at_ms, price, mcap, size_sol, token_amount_est, reason, payload_json)
       VALUES (?, ?, 'sell', ?, ?, ?, ?, ?, ?, ?)
-    `).run(position.id, position.mint, now(), price, mcap, position.size_sol, position.token_amount_est, exitReason, json({ pnlPercent: finalPnlPercent, pnlSol: finalPnlSol, receivedSol: receivedSol ?? null, sell }));
+    `).run(position.id, position.mint, now(), price, mcap, position.size_sol, position.token_amount_est, exitReason,
+      json({ pnlPercent: finalPnlPercent, pnlSol: finalPnlSol, receivedSol: receivedSol ?? null, sell }));
     closed = true;
   } else if (exitReason && autoExit) {
     db.prepare(`
@@ -214,9 +279,11 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
     db.prepare(`
       INSERT INTO dry_run_trades (position_id, mint, side, at_ms, price, mcap, size_sol, token_amount_est, reason, payload_json)
       VALUES (?, ?, 'sell', ?, ?, ?, ?, ?, ?, ?)
-    `).run(position.id, position.mint, now(), price, mcap, position.size_sol, position.token_amount_est, exitReason, json({ pnlPercent, pnlSol }));
+    `).run(position.id, position.mint, now(), price, mcap, position.size_sol, position.token_amount_est, exitReason,
+      json({ pnlPercent, pnlSol }));
     closed = true;
   }
+
   return {
     ...position,
     status: closed ? 'closed' : position.status,
@@ -235,6 +302,7 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
     exit_reason: closed ? exitReason : position.exit_reason,
     exit_mcap: closed ? mcap : position.exit_mcap,
     exit_price: closed ? price : position.exit_price,
+    partialFired,
   };
 }
 
@@ -268,6 +336,15 @@ export async function monitorPositions() {
       console.log(`[position] ${position.id} ${err.message}`);
       return null;
     });
+    if (result?.partialFired && !result?.exitReason) {
+      const strat = strategyById(position.strategy_id);
+      const notified = db.prepare('SELECT partial_exit_notified FROM dry_run_positions WHERE id = ?').get(position.id);
+      if (!notified?.partial_exit_notified) {
+        db.prepare('UPDATE dry_run_positions SET partial_exit_notified = 1 WHERE id = ?').run(position.id);
+        await sendPartialExit(result, result.pnlPercent, strat?.partial_exit_size, strat?.trailing_stop_pct).catch(err =>
+          console.log(`[position] partial exit notify failed: ${err.message}`));
+      }
+    }
     if (result?.exitReason) {
       await sendPositionExit(result);
       anyExit = true;

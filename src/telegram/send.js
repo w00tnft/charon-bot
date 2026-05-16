@@ -183,9 +183,62 @@ export async function sendPositionOpen(positionId) {
   await sendTelegram(lines.join('\n'), { reply_markup: { inline_keyboard: buttons } });
 }
 
+export async function sendPartialExit(position, pnlPercent, partialExitSize, trailingStopPct) {
+  const symbol = escapeHtml(position.symbol || short(position.mint));
+  const sizePct = Math.round((partialExitSize ?? 0.6) * 100);
+  const trail = Math.round(trailingStopPct ?? 20);
+  const isDryRun = position.execution_mode !== 'live';
+  const header = isDryRun ? '💰 <b>PARTIAL EXIT (dry-run)</b>' : '💰 <b>PARTIAL EXIT — Capital Recovered</b>';
+  await sendTelegram([
+    header,
+    '',
+    `🪙 Token: <b>$${symbol}</b>`,
+    `📋 CA: <code>${position.mint}</code>`,
+    `📊 PnL at exit: <b>+${pnlPercent.toFixed(1)}%</b>`,
+    `💵 Sold: <b>${sizePct}%</b> of position`,
+    '🎲 Remainder riding with house money',
+    `📈 Trailing stop now active: ATH −${trail}%`,
+  ].join('\n'));
+}
+
 export async function sendPositionExit(position) {
   const label = position?.execution_mode === 'live' ? 'Live exit' : 'Dry-run exit';
-  await sendTelegram(`🏁 <b>${label}: ${escapeHtml(position.exitReason)}</b>\n\n${formatPosition({ ...position, status: 'closed' })}`);
+  const reason = position.exitReason || position.exit_reason || '';
+
+  if (reason === 'TRAILING_STOP') {
+    const symbol = escapeHtml(position.symbol || short(position.mint));
+    const athMcap = Number(position.high_water_mcap || position.exit_mcap || 0);
+    const exitMcap = Number(position.exit_mcap || position.mcap || 0);
+    const dropPct = athMcap > 0 && exitMcap > 0
+      ? ((exitMcap / athMcap) - 1) * 100
+      : null;
+    const lines = [
+      `🔔 <b>${label}: TRAILING STOP HIT</b>`,
+      '',
+      `🪙 Token: <b>$${symbol}</b>`,
+      `📋 CA: <code>${position.mint}</code>`,
+    ];
+    if (athMcap > 0) lines.push(`📈 ATH McAp: <b>${fmtUsd(athMcap)}</b>`);
+    if (dropPct !== null) lines.push(`📉 Drop from ATH: <b>${dropPct.toFixed(1)}%</b>`);
+    lines.push(`💰 Final PnL: <b>${fmtPct(position.pnl_percent ?? position.pnlPercent)}</b>`);
+    await sendTelegram(lines.join('\n'));
+    return;
+  }
+
+  if (reason === 'HARD_SL') {
+    const symbol = escapeHtml(position.symbol || short(position.mint));
+    const lines = [
+      `🛑 <b>${label}: HARD STOP HIT</b>`,
+      '',
+      `🪙 Token: <b>$${symbol}</b>`,
+      `📋 CA: <code>${position.mint}</code>`,
+      `💸 PnL: <b>${fmtPct(position.pnl_percent ?? position.pnlPercent)}</b>`,
+    ];
+    await sendTelegram(lines.join('\n'));
+    return;
+  }
+
+  await sendTelegram(`🏁 <b>${label}: ${escapeHtml(reason)}</b>\n\n${formatPosition({ ...position, status: 'closed' })}`);
 }
 
 export async function sendTradeIntent(intentId, candidate, decision) {
