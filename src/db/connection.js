@@ -215,6 +215,7 @@ export function initDb() {
   ensureColumn('dry_run_positions', 'token_amount_raw', 'TEXT');
   ensureColumn('dry_run_positions', 'strategy_id', "TEXT DEFAULT 'sniper'");
   ensureColumn('dry_run_positions', 'partial_tp_done', 'INTEGER DEFAULT 0');
+  ensureColumn('dry_run_positions', 'partial_exit_notified', 'INTEGER DEFAULT 0');
   ensureColumn('decision_logs', 'strategy_id', 'TEXT');
 
   const weightInsert = db.prepare('INSERT OR IGNORE INTO route_weights (route, win_count, loss_count, avg_pnl_pct, weight, updated_at_ms) VALUES (?, 0, 0, 0, 1.0, ?)');
@@ -377,13 +378,10 @@ export function initDb() {
     trending_max_bundler_rate: 0.25,
     position_size_sol: 0.05,
     max_open_positions: 3,
-    tp_percent: 150,
-    sl_percent: -30,
-    trailing_enabled: true,
-    trailing_percent: 20,
-    partial_tp: true,
-    partial_tp_at_percent: 100,
-    partial_tp_sell_percent: 50,
+    partial_exit_pct: 30,
+    partial_exit_size: 0.60,
+    trailing_stop_pct: 20,
+    hard_stop_pct: 25,
     max_hold_ms: 1200000,
     use_llm: false,
     llm_min_confidence: 0,
@@ -407,13 +405,10 @@ export function initDb() {
     trending_max_rug_ratio: 0.25,
     trending_max_bundler_rate: 0.25,
     max_open_positions: 3,
-    tp_percent: 150,
-    sl_percent: -30,
-    trailing_enabled: 1,
-    trailing_percent: 20,
-    partial_tp: 1,
-    partial_tp_at_percent: 100,
-    partial_tp_sell_percent: 50,
+    partial_exit_pct: 30,
+    partial_exit_size: 0.60,
+    trailing_stop_pct: 20,
+    hard_stop_pct: 25,
     max_hold_ms: 1200000,
     min_safety_score: 65,
   };
