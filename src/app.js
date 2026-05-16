@@ -1,11 +1,13 @@
 import { setDefaultResultOrder } from 'node:dns';
-import { APP_NAME, SIGNAL_SERVER_URL, SIGNAL_POLL_MS, GRADUATED_POLL_MS, TRENDING_POLL_MS, POSITION_CHECK_MS, validateConfig } from './config.js';
+import { APP_NAME, SIGNAL_SERVER_URL, SIGNAL_POLL_MS, GRADUATED_POLL_MS, TRENDING_POLL_MS, POSITION_CHECK_MS, REPORT_INTERVAL_MS, validateConfig } from './config.js';
 import { initDb } from './db/connection.js';
 import { initLiveExecution } from './liveExecutor.js';
 import { setupTelegram } from './telegram/commands.js';
 import { monitorPositions } from './execution/positions.js';
 import { processCandidateFromSignals, maybeProcessDegenCandidate } from './pipeline/orchestrator.js';
 import { sendTelegram, probeTelegram } from './telegram/send.js';
+import { sendDailyReport } from './telegram/report.js';
+import { numSetting } from './db/settings.js';
 import { makeFailureTracker } from './utils.js';
 
 setDefaultResultOrder('ipv4first');
@@ -61,4 +63,20 @@ export async function startCharon() {
   // Position monitoring runs in both modes
   const trackPositions = makeFailureTracker('position monitor', (msg) => sendTelegram(msg));
   setInterval(() => trackPositions(() => monitorPositions()), POSITION_CHECK_MS);
+
+  // Daily report scheduler — checks every hour
+  const checkDailyReport = async () => {
+    const lastSent = numSetting('last_report_sent_ms', 0);
+    const nextDue = lastSent + REPORT_INTERVAL_MS;
+    if (Date.now() >= nextDue) {
+      await sendDailyReport().catch(err => console.log(`[report] error: ${err.message}`));
+    } else {
+      const remaining = nextDue - Date.now();
+      const h = Math.floor(remaining / 3_600_000);
+      const m = Math.floor((remaining % 3_600_000) / 60_000);
+      console.log(`[report] next report in ${h}h ${m}m`);
+    }
+  };
+  setInterval(() => checkDailyReport().catch(() => {}), 60 * 60 * 1000);
+  checkDailyReport().catch(() => {});
 }

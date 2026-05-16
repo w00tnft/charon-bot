@@ -225,6 +225,12 @@ export function initDb() {
       whitelisted_at_ms INTEGER NOT NULL
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_whitelist_deployer ON whitelist(deployer);
+    CREATE TABLE IF NOT EXISTS capital_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      snapshot_at TEXT DEFAULT (datetime('now')),
+      capital_sol REAL NOT NULL,
+      trade_number INTEGER NOT NULL
+    );
   `);
   ensureColumn('candidates', 'signal_key', 'TEXT');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_candidates_signal_key ON candidates(signal_key) WHERE signal_key IS NOT NULL');
@@ -251,6 +257,7 @@ export function initDb() {
     llm_min_confidence: '75',
     max_open_positions: process.env.MAX_OPEN_POSITIONS || '3',
     dry_run_buy_sol: '0.1',
+    starting_capital_sol: '1.0',
     default_tp_percent: '50',
     default_sl_percent: '-25',
     default_trailing_enabled: 'true',
