@@ -11,7 +11,9 @@ import { openPositions } from '../db/positions.js';
 import { updateCandidateSnapshot } from '../db/candidates.js';
 import { trending } from '../signals/trending.js';
 import { executeLiveSell } from './router.js';
-import { sendPositionExit, sendPartialExit } from '../telegram/send.js';
+import { sendPositionExit, sendPartialExit, sendTelegram } from '../telegram/send.js';
+import { blacklistToken, whitelistDeployer } from '../db/blacklist.js';
+import { escapeHtml, short } from '../format.js';
 import { autoRunLearning } from '../learning/commands.js';
 
 export async function freshEntryMarket(mint, candidate) {
@@ -337,6 +339,39 @@ async function maybeAutoLearn() {
   await autoRunLearning(milestone);
 }
 
+function extractDeployer(result) {
+  try {
+    const snap = JSON.parse(result.snapshot_json || '{}');
+    return snap.candidate?.token?.deployerAddress
+      || snap.candidate?.safety?.deployerAddress
+      || null;
+  } catch {
+    return null;
+  }
+}
+
+async function maybeUpdateReputation(result) {
+  const deployer = extractDeployer(result);
+  const pnl = result.pnl_percent ?? result.pnlPercent ?? 0;
+  const symbol = result.symbol || short(result.mint);
+
+  if (result.exit_class === 'loss' && (result.exitReason === 'HARD_SL' || result.exitReason === 'SL')) {
+    blacklistToken(result.mint, deployer, pnl);
+    const deployerShort = deployer ? deployer.slice(0, 8) + '…' : 'unknown';
+    await sendTelegram([
+      '🚫 <b>BLACKLISTED</b>',
+      '',
+      `🪙 Token: <b>$${escapeHtml(symbol)}</b>`,
+      `📋 CA: <code>${result.mint}</code>`,
+      `👛 Deployer: <code>${deployerShort}</code>`,
+      `💀 Reason: Hard stop hit (${pnl.toFixed(1)}%)`,
+      deployer ? '⛔ This deployer is now banned' : '',
+    ].filter(l => l !== '').join('\n')).catch(() => {});
+  } else if (result.exit_class === 'win') {
+    whitelistDeployer(deployer, result.mint, pnl);
+  }
+}
+
 export async function monitorPositions() {
   const positions = openPositions();
   let walletPnlData = {};
@@ -365,6 +400,8 @@ export async function monitorPositions() {
     if (result?.exitReason) {
       await sendPositionExit(result);
       anyExit = true;
+      await maybeUpdateReputation(result).catch(err =>
+        console.log(`[blacklist] reputation update error: ${err.message}`));
     }
 
     // Dry-run positions that can't be priced (dead token, no liquidity) are closed

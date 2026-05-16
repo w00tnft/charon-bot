@@ -206,6 +206,25 @@ export function initDb() {
       weight REAL DEFAULT 1.0,
       updated_at_ms INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS blacklist (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      mint TEXT,
+      deployer TEXT,
+      reason TEXT NOT NULL,
+      pnl_percent REAL,
+      banned_at_ms INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_blacklist_mint ON blacklist(mint);
+    CREATE INDEX IF NOT EXISTS idx_blacklist_deployer ON blacklist(deployer);
+    CREATE TABLE IF NOT EXISTS whitelist (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      deployer TEXT NOT NULL,
+      mint TEXT,
+      reason TEXT NOT NULL,
+      pnl_percent REAL,
+      whitelisted_at_ms INTEGER NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_whitelist_deployer ON whitelist(deployer);
   `);
   ensureColumn('candidates', 'signal_key', 'TEXT');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_candidates_signal_key ON candidates(signal_key) WHERE signal_key IS NOT NULL');
@@ -364,8 +383,8 @@ export function initDb() {
     min_source_count: 2,
     require_fee_claim: false,
     token_age_max_ms: 3600000,
-    min_mcap_usd: 8000,
-    max_mcap_usd: 80000,
+    min_mcap_usd: 15000,
+    max_mcap_usd: 100000,
     min_fee_claim_sol: 0,
     min_gmgn_total_fee_sol: 0,
     min_holders: 0,
@@ -373,8 +392,8 @@ export function initDb() {
     min_saved_wallet_holders: 0,
     max_ath_distance_pct: 0,
     min_graduated_volume_usd: 0,
-    trending_min_volume_usd: 0,
-    trending_min_swaps: 0,
+    trending_min_volume_usd: 5000,
+    trending_min_swaps: 50,
     trending_max_rug_ratio: 0.25,
     trending_max_bundler_rate: 0.25,
     position_size_sol: 0.05,
@@ -401,8 +420,10 @@ export function initDb() {
   // Apply all current degen settings to existing DBs (INSERT OR IGNORE won't update them).
   const degenMigrations = {
     min_source_count: 2,
-    min_mcap_usd: 8000,
-    max_mcap_usd: 80000,
+    min_mcap_usd: 15000,
+    max_mcap_usd: 100000,
+    trending_min_volume_usd: 5000,
+    trending_min_swaps: 50,
     trending_max_rug_ratio: 0.25,
     trending_max_bundler_rate: 0.25,
     max_open_positions: 3,

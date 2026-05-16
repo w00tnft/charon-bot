@@ -27,6 +27,7 @@ import { refreshPosition } from '../execution/positions.js';
 import { executeLiveSell } from '../execution/router.js';
 import { handleCallback, editMenuMessage } from './callbacks.js';
 import { consumeNumericFilterInput } from './input.js';
+import { getBlacklist } from '../db/blacklist.js';
 import { runLearning, sendLessons } from '../learning/commands.js';
 
 export async function handleMessage(msg) {
@@ -74,6 +75,7 @@ export async function handleMessage(msg) {
     updateStrategyConfig(id, newConfig);
     return bot.sendMessage(chatId, `Updated ${id}.${key} = ${value}\n\n${strategyMenuText()}`, { parse_mode: 'HTML' });
   }
+  if (text.startsWith('/blacklist')) return sendBlacklistReport(chatId);
   if (text.startsWith('/summary')) return sendSummary(chatId);
   if (text.startsWith('/pnl')) return sendPnl(chatId);
   if (text.startsWith('/learn')) {
@@ -244,6 +246,7 @@ export function setupTelegram() {
     { command: 'positions', description: 'Show dry-run positions' },
     { command: 'candidate', description: 'Show candidate by mint' },
     { command: 'filters', description: 'Show filters' },
+    { command: 'blacklist', description: 'Show blacklisted tokens and banned deployers' },
     { command: 'summary', description: 'Trading summary: win rate, PnL, best/worst trades' },
     { command: 'pnl', description: 'PnL breakdown by route and totals' },
     { command: 'learn', description: 'Run manual learning report' },
@@ -267,6 +270,32 @@ async function sendMenu(chatId = TELEGRAM_CHAT_ID) {
     ...(TELEGRAM_TOPIC_ID ? { message_thread_id: Number(TELEGRAM_TOPIC_ID) } : {}),
     ...menuKeyboard(),
   });
+}
+
+export async function sendBlacklistReport(chatId) {
+  const { tokens, deployers } = getBlacklist();
+  const ago = ms => {
+    const mins = Math.round((Date.now() - ms) / 60000);
+    return mins < 60 ? `${mins}m ago` : `${Math.round(mins / 60)}h ago`;
+  };
+  const lines = ['🚫 <b>CHARON BLACKLIST</b>', ''];
+  if (tokens.length === 0 && deployers.length === 0) {
+    lines.push('No blacklisted tokens or deployers yet.');
+  } else {
+    lines.push(`<b>Tokens: ${tokens.length}</b>`);
+    for (const t of tokens) {
+      const sym = t.mint.slice(0, 8);
+      lines.push(`• <code>${sym}…</code> — ${t.pnl_percent != null ? t.pnl_percent.toFixed(1) + '%' : '?'} (${ago(t.banned_at_ms)})`);
+    }
+    if (deployers.length > 0) {
+      lines.push('');
+      lines.push(`<b>Deployers: ${deployers.length}</b>`);
+      for (const d of deployers) {
+        lines.push(`• <code>${d.deployer.slice(0, 8)}…</code> — ${d.rug_count} rug${d.rug_count !== 1 ? 's' : ''} (${ago(d.latest_ms)})`);
+      }
+    }
+  }
+  return bot.sendMessage(chatId, lines.join('\n'), { parse_mode: 'HTML' });
 }
 
 export async function sendSummary(chatId) {
