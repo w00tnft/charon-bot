@@ -40,7 +40,7 @@ export function createDryRunPosition(candidateId, candidate, decision, reason = 
     const existing = db.prepare(`
       SELECT id FROM dry_run_positions WHERE mint = ? AND status = 'open' LIMIT 1
     `).get(candidate.token.mint);
-    if (existing) return existing.id;
+    if (existing) return { id: existing.id, isNew: false };
 
     const result = db.prepare(`
       INSERT INTO dry_run_positions (
@@ -76,7 +76,7 @@ export function createDryRunPosition(candidateId, candidate, decision, reason = 
       INSERT INTO tp_sl_rules (position_id, tp_percent, sl_percent, trailing_enabled, trailing_percent, updated_at_ms)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(positionId, tp, sl, trailingEnabled, trailingPercent, now());
-    return positionId;
+    return { id: positionId, isNew: true };
   })();
 }
 

@@ -152,7 +152,8 @@ export async function handleApprovedBuy(selectedRow, decision, batchId, rows = [
   }
 
   if (mode === 'dry_run') {
-    const positionId = await createDryRunPosition(freshSelectedRow.id, freshSelectedRow.candidate, decision, `llm_batch_${batchId}`);
+    const strat = activeStrategy();
+    const { id: positionId, isNew } = createDryRunPosition(freshSelectedRow.id, freshSelectedRow.candidate, decision, `llm_batch_${batchId}`);
     logDecisionEvent({
       batchId,
       triggerCandidateId,
@@ -160,11 +161,11 @@ export async function handleApprovedBuy(selectedRow, decision, batchId, rows = [
       rows: executionRows,
       decision,
       mode,
-      action: 'dry_run_entry',
-      guardrails: { maxOpenPositions: numSetting('max_open_positions', 3), openPositions: openPositionCount() },
-      execution: { positionId },
+      action: isNew ? 'dry_run_entry' : 'dry_run_duplicate_skipped',
+      guardrails: { maxOpenPositions: strat.max_open_positions ?? numSetting('max_open_positions', 3), openPositions: openPositionCount() },
+      execution: { positionId, isNew },
     });
-    await sendPositionOpen(positionId);
+    if (isNew) await sendPositionOpen(positionId);
     return;
   }
 

@@ -42,7 +42,12 @@ export async function fetchServerSignals() {
     });
     const signals = res.data?.signals || [];
 
-    prune(seenSignals, 10 * 60_000);
+    prune(seenSignals, 2 * 60 * 60_000);
+
+    // Prune graduated map — entries older than 2 hours are stale
+    for (const [mint, coin] of graduated) {
+      if (now() - (coin.seenAt || 0) > 2 * 60 * 60_000) graduated.delete(mint);
+    }
 
     const strat = activeStrategy();
     let processed = 0;

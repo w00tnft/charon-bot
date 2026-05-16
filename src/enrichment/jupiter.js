@@ -3,6 +3,7 @@ import { WSOL_MINT, JSON_HEADERS } from '../config.js';
 import { now } from '../utils.js';
 
 const jupiterAssetCache = new Map();
+const JUPITER_CACHE_MAX = 500;
 let jupiterAssetBackoffUntil = 0;
 
 function jupiterAssetBackoffActive() {
@@ -68,6 +69,9 @@ async function fetchJupiterAsset(mint, { useCache = true, ttlMs = 20_000 } = {})
     });
     const rows = Array.isArray(res.data) ? res.data : [];
     const data = rows.find(row => row?.id === mint) || rows[0] || null;
+    if (jupiterAssetCache.size >= JUPITER_CACHE_MAX) {
+      jupiterAssetCache.delete(jupiterAssetCache.keys().next().value);
+    }
     jupiterAssetCache.set(mint, { at: now(), data });
     return data;
   } catch (err) {
