@@ -1,7 +1,7 @@
 import { bot } from './bot.js';
 import { TELEGRAM_CHAT_ID } from '../config.js';
 import { now, json } from '../utils.js';
-import { escapeHtml, fmtPct } from '../format.js';
+import { escapeHtml, fmtPct, fmtSol } from '../format.js';
 import { db } from '../db/connection.js';
 import { numSetting, boolSetting, setSetting, activeStrategy, setActiveStrategy, strategyById, updateStrategyConfig } from '../db/settings.js';
 import { candidateById, latestCandidateByMint, updateCandidateStatus } from '../db/candidates.js';
@@ -28,7 +28,6 @@ import { executeLiveSell } from '../execution/router.js';
 import { handleCallback, editMenuMessage } from './callbacks.js';
 import { consumeNumericFilterInput } from './input.js';
 import { runLearning, sendLessons } from '../learning/commands.js';
-import { fetchWalletPnl } from '../enrichment/wallets.js';
 
 export async function handleMessage(msg) {
   const text = (msg.text || '').trim();
@@ -75,6 +74,7 @@ export async function handleMessage(msg) {
     updateStrategyConfig(id, newConfig);
     return bot.sendMessage(chatId, `Updated ${id}.${key} = ${value}\n\n${strategyMenuText()}`, { parse_mode: 'HTML' });
   }
+  if (text.startsWith('/summary')) return sendSummary(chatId);
   if (text.startsWith('/pnl')) return sendPnl(chatId);
   if (text.startsWith('/learn')) {
     const windowArg = text.split(/\s+/)[1] || '12h';
@@ -244,7 +244,8 @@ export function setupTelegram() {
     { command: 'positions', description: 'Show dry-run positions' },
     { command: 'candidate', description: 'Show candidate by mint' },
     { command: 'filters', description: 'Show filters' },
-    { command: 'pnl', description: 'Show saved-wallet PnL' },
+    { command: 'summary', description: 'Trading summary: win rate, PnL, best/worst trades' },
+    { command: 'pnl', description: 'PnL breakdown by route and totals' },
     { command: 'learn', description: 'Run manual learning report' },
     { command: 'lessons', description: 'Show active screening lessons' },
     { command: 'setfilter', description: 'Set a filter value' },
@@ -268,26 +269,72 @@ async function sendMenu(chatId = TELEGRAM_CHAT_ID) {
   });
 }
 
+export async function sendSummary(chatId) {
+  const closed = db.prepare("SELECT * FROM dry_run_positions WHERE status = 'closed' ORDER BY pnl_percent DESC").all();
+  if (!closed.length) {
+    return bot.sendMessage(chatId, '📊 <b>Summary</b>\n\nNo closed positions yet.', { parse_mode: 'HTML' });
+  }
+  const wins = closed.filter(p => Number(p.pnl_percent || 0) > 0);
+  const losses = closed.filter(p => Number(p.pnl_percent || 0) < 0);
+  const winRate = wins.length / closed.length * 100;
+  const avgPnl = closed.reduce((s, p) => s + Number(p.pnl_percent || 0), 0) / closed.length;
+  const best = closed[0];
+  const worst = closed[closed.length - 1];
+  const lessonCount = db.prepare("SELECT COUNT(*) AS count FROM learning_lessons WHERE status = 'active'").get().count;
+
+  const lines = [
+    '📊 <b>Trading Summary</b>',
+    '',
+    `Closed positions: <b>${closed.length}</b>`,
+    `Win rate: <b>${fmtPct(winRate)}</b>`,
+    `Avg PnL: <b>${fmtPct(avgPnl)}</b>`,
+    '',
+    `Best trade: <b>${escapeHtml(best.symbol || best.mint.slice(0, 8))}…</b> ${fmtPct(Number(best.pnl_percent))}`,
+    `Worst trade: <b>${escapeHtml(worst.symbol || worst.mint.slice(0, 8))}…</b> ${fmtPct(Number(worst.pnl_percent))}`,
+    '',
+    `Active lessons: <b>${lessonCount}</b>`,
+  ];
+  return bot.sendMessage(chatId, lines.join('\n'), { parse_mode: 'HTML' });
+}
+
 export async function sendPnl(chatId, query = null) {
-  const wallets = savedWallets();
-  if (!wallets.length) {
-    const text = '📊 <b>PnL</b>\n\nNo saved wallets. Use /walletadd &lt;label&gt; &lt;address&gt;.';
+  const closed = db.prepare("SELECT pnl_percent, pnl_sol, snapshot_json FROM dry_run_positions WHERE status = 'closed'").all();
+  if (!closed.length) {
+    const text = '📊 <b>PnL</b>\n\nNo closed positions yet.';
     return query ? editMenuMessage(query, text, navKeyboard()) : bot.sendMessage(chatId, text, { parse_mode: 'HTML' });
   }
-  const chunks = [];
-  for (const wallet of wallets) {
-    const pnl = await fetchWalletPnl(wallet.address).catch(() => null);
-    if (!pnl) {
-      chunks.push(`• <b>${escapeHtml(wallet.label)}</b>: no data`);
-      continue;
-    }
-    chunks.push([
-      `• <b>${escapeHtml(wallet.label)}</b>`,
-      `Win: ${fmtPct(pnl.winRate)} · PnL: ${fmtPct(pnl.totalPnlPercent)}`,
-      `Trades: ${pnl.totalTrades} · Wins: ${pnl.wins}`,
-    ].join('\n'));
+
+  const wins = closed.filter(p => Number(p.pnl_percent || 0) > 0);
+  const losses = closed.filter(p => Number(p.pnl_percent || 0) < 0);
+  const totalPnlSol = closed.reduce((s, p) => s + Number(p.pnl_sol || 0), 0);
+  const winRate = wins.length / closed.length * 100;
+
+  const byRoute = new Map();
+  for (const pos of closed) {
+    let snap = {};
+    try { snap = JSON.parse(pos.snapshot_json || '{}'); } catch { /* */ }
+    const route = snap.candidate?.signals?.route || snap.candidate?.signals?.label || 'unknown';
+    const row = byRoute.get(route) || { route, count: 0, wins: 0, pnlSum: 0 };
+    row.count += 1;
+    row.wins += Number(pos.pnl_percent || 0) > 0 ? 1 : 0;
+    row.pnlSum += Number(pos.pnl_percent || 0);
+    byRoute.set(route, row);
   }
-  const text = `📊 <b>PnL</b>\n\n${chunks.join('\n\n')}`;
+  const routeLines = [...byRoute.values()]
+    .sort((a, b) => b.pnlSum - a.pnlSum)
+    .map(r => `• ${escapeHtml(r.route)}: ${r.wins}/${r.count} wins · avg ${fmtPct(r.pnlSum / r.count)}`);
+
+  const lines = [
+    '📊 <b>PnL</b>',
+    '',
+    `Total SOL: <b>${fmtSol(totalPnlSol)} SOL</b>`,
+    `Trades: <b>${closed.length}</b> · Wins: <b>${wins.length}</b> · Losses: <b>${losses.length}</b>`,
+    `Win rate: <b>${fmtPct(winRate)}</b>`,
+    '',
+    '<b>By route:</b>',
+    ...routeLines,
+  ];
+  const text = lines.join('\n');
   return query ? editMenuMessage(query, text, navKeyboard()) : bot.sendMessage(chatId, text, { parse_mode: 'HTML' });
 }
 
@@ -300,6 +347,3 @@ function allPositions(limit = 10) {
   return db.prepare('SELECT * FROM dry_run_positions ORDER BY id DESC LIMIT ?').all(limit);
 }
 
-function savedWallets() {
-  return db.prepare('SELECT * FROM saved_wallets ORDER BY label').all();
-}
