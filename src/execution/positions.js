@@ -106,6 +106,17 @@ export async function refreshCandidateForExecution(row) {
   return { ...row, candidate: refreshed };
 }
 
+export function classifyExit(exitReason, pnlPercent, partialDone) {
+  const reason = (exitReason || '').toUpperCase();
+  const pnl = Number(pnlPercent || 0);
+  if (reason === 'HARD_SL' || reason === 'SL' || pnl < 0) return 'loss';
+  if (partialDone) return 'win';
+  if (reason === 'TRAILING_STOP' || reason === 'TP' || reason === 'TRAILING_TP') return pnl > 0 ? 'win' : 'loss';
+  if (pnl >= 30) return 'win';
+  if (pnl > 0) return 'neutral';
+  return 'loss';
+}
+
 const sellInProgress = new Set();
 
 async function doLiveSell(position, reason, price, mcap) {
@@ -258,12 +269,13 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
       finalPnlSol = receivedSol - Number(position.size_sol);
       finalPnlPercent = (receivedSol / Number(position.size_sol) - 1) * 100;
     }
+    const liveExitClass = classifyExit(exitReason, finalPnlPercent, Boolean(position.partial_tp_done) || partialFired);
     db.prepare(`
       UPDATE dry_run_positions
       SET status = 'closed', closed_at_ms = ?, exit_price = ?, exit_mcap = ?, exit_reason = ?,
-          pnl_percent = ?, pnl_sol = ?, exit_signature = ?
+          pnl_percent = ?, pnl_sol = ?, exit_signature = ?, exit_class = ?
       WHERE id = ?
-    `).run(now(), price, mcap, exitReason, finalPnlPercent, finalPnlSol, sell.signature, position.id);
+    `).run(now(), price, mcap, exitReason, finalPnlPercent, finalPnlSol, sell.signature, liveExitClass, position.id);
     db.prepare(`
       INSERT INTO dry_run_trades (position_id, mint, side, at_ms, price, mcap, size_sol, token_amount_est, reason, payload_json)
       VALUES (?, ?, 'sell', ?, ?, ?, ?, ?, ?, ?)
@@ -271,11 +283,13 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
       json({ pnlPercent: finalPnlPercent, pnlSol: finalPnlSol, receivedSol: receivedSol ?? null, sell }));
     closed = true;
   } else if (exitReason && autoExit) {
+    const dryExitClass = classifyExit(exitReason, pnlPercent, Boolean(position.partial_tp_done) || partialFired);
     db.prepare(`
       UPDATE dry_run_positions
-      SET status = 'closed', closed_at_ms = ?, exit_price = ?, exit_mcap = ?, exit_reason = ?, pnl_percent = ?, pnl_sol = ?
+      SET status = 'closed', closed_at_ms = ?, exit_price = ?, exit_mcap = ?, exit_reason = ?,
+          pnl_percent = ?, pnl_sol = ?, exit_class = ?
       WHERE id = ?
-    `).run(now(), price, mcap, exitReason, pnlPercent, pnlSol, position.id);
+    `).run(now(), price, mcap, exitReason, pnlPercent, pnlSol, dryExitClass, position.id);
     db.prepare(`
       INSERT INTO dry_run_trades (position_id, mint, side, at_ms, price, mcap, size_sol, token_amount_est, reason, payload_json)
       VALUES (?, ?, 'sell', ?, ?, ?, ?, ?, ?, ?)
@@ -302,6 +316,9 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
     exit_reason: closed ? exitReason : position.exit_reason,
     exit_mcap: closed ? mcap : position.exit_mcap,
     exit_price: closed ? price : position.exit_price,
+    exit_class: closed
+      ? classifyExit(exitReason, finalPnlPercent, Boolean(position.partial_tp_done) || partialFired)
+      : position.exit_class,
     partialFired,
   };
 }
@@ -357,7 +374,8 @@ export async function monitorPositions() {
       if (ageMs >= DRY_RUN_TIMEOUT_MS) {
         db.prepare(`
           UPDATE dry_run_positions
-          SET status = 'closed', closed_at_ms = ?, exit_reason = 'DRY_RUN_TIMEOUT', pnl_percent = 0, pnl_sol = 0
+          SET status = 'closed', closed_at_ms = ?, exit_reason = 'DRY_RUN_TIMEOUT', pnl_percent = 0, pnl_sol = 0,
+              exit_class = 'loss'
           WHERE id = ?
         `).run(now(), position.id);
         console.log(`[position] ${position.id} (${position.symbol || position.mint.slice(0, 8)}) auto-closed after ${Math.round(ageMs / 60000)}m — no price data`);

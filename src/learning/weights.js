@@ -21,7 +21,7 @@ function clamp(value, min, max) {
 
 export function recalculateWeights() {
   const positions = db.prepare(`
-    SELECT pnl_percent, snapshot_json
+    SELECT pnl_percent, exit_class, snapshot_json
     FROM dry_run_positions
     WHERE status = 'closed'
       AND COALESCE(execution_mode, 'dry_run') = 'dry_run'
@@ -36,10 +36,13 @@ export function recalculateWeights() {
       route = toCanonicalRoute(rawRoute);
     } catch { /* malformed snapshot — skip */ }
     const pnl = Number(pos.pnl_percent || 0);
-    const row = byRoute.get(route) || { wins: 0, losses: 0, pnlSum: 0, count: 0 };
+    // Fallback for positions that predate the exit_class column
+    const exitClass = pos.exit_class || (pnl > 0 ? 'win' : 'loss');
+    const row = byRoute.get(route) || { wins: 0, neutrals: 0, losses: 0, pnlSum: 0, count: 0 };
     row.count += 1;
-    row.wins += pnl > 0 ? 1 : 0;
-    row.losses += pnl < 0 ? 1 : 0;
+    row.wins += exitClass === 'win' ? 1 : 0;
+    row.neutrals += exitClass === 'neutral' ? 1 : 0;
+    row.losses += exitClass === 'loss' ? 1 : 0;
     row.pnlSum += pnl;
     byRoute.set(route, row);
   }
@@ -58,11 +61,16 @@ export function recalculateWeights() {
   const results = [];
   for (const [route, row] of byRoute.entries()) {
     if (row.count === 0) continue;
-    const winRate = row.wins / row.count;
+    const decisive = row.wins + row.losses; // neutrals excluded from win rate
+    const winRate = decisive > 0 ? row.wins / decisive : 0.5;
+    const neutralRate = row.neutrals / row.count;
     const avgPnl = row.pnlSum / row.count;
-    const weight = clamp(winRate * (avgPnl / 100), 0.5, 2.0);
+    const weight = clamp(
+      (winRate * (avgPnl / 100)) - (neutralRate * 0.1),
+      0.5, 2.0,
+    );
     upsert.run(route, row.wins, row.losses, avgPnl, weight, now());
-    results.push({ route, weight, winRate: winRate * 100, avgPnl, count: row.count });
+    results.push({ route, weight, winRate: winRate * 100, avgPnl, count: row.count, wins: row.wins, neutrals: row.neutrals, losses: row.losses });
   }
 
   if (results.length > 0) {

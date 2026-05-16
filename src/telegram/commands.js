@@ -274,19 +274,26 @@ export async function sendSummary(chatId) {
   if (!closed.length) {
     return bot.sendMessage(chatId, '📊 <b>Summary</b>\n\nNo closed positions yet.', { parse_mode: 'HTML' });
   }
-  const wins = closed.filter(p => Number(p.pnl_percent || 0) > 0);
-  const losses = closed.filter(p => Number(p.pnl_percent || 0) < 0);
-  const winRate = wins.length / closed.length * 100;
-  const avgPnl = closed.reduce((s, p) => s + Number(p.pnl_percent || 0), 0) / closed.length;
+  const total = closed.length;
+  const wins = closed.filter(p => (p.exit_class || (Number(p.pnl_percent || 0) > 0 ? 'win' : 'loss')) === 'win');
+  const neutrals = closed.filter(p => p.exit_class === 'neutral');
+  const losses = closed.filter(p => (p.exit_class || (Number(p.pnl_percent || 0) > 0 ? 'win' : 'loss')) === 'loss');
+  const netScore = wins.length - losses.length;
+  const netIcon = netScore > 0 ? '✅' : netScore < 0 ? '⚠️' : '➡️';
+  const avgPnl = closed.reduce((s, p) => s + Number(p.pnl_percent || 0), 0) / total;
   const best = closed[0];
   const worst = closed[closed.length - 1];
   const lessonCount = db.prepare("SELECT COUNT(*) AS count FROM learning_lessons WHERE status = 'active'").get().count;
+  const pct = n => `${Math.round(n / total * 100)}%`;
 
   const lines = [
     '📊 <b>Trading Summary</b>',
     '',
-    `Closed positions: <b>${closed.length}</b>`,
-    `Win rate: <b>${fmtPct(winRate)}</b>`,
+    `Closed positions: <b>${total}</b>`,
+    `✅ Wins: <b>${wins.length}</b> (${pct(wins.length)})`,
+    `⚖️ Neutral: <b>${neutrals.length}</b> (${pct(neutrals.length)})`,
+    `❌ Losses: <b>${losses.length}</b> (${pct(losses.length)})`,
+    `Net score: <b>${netScore > 0 ? '+' : ''}${netScore}</b> ${netIcon}`,
     `Avg PnL: <b>${fmtPct(avgPnl)}</b>`,
     '',
     `Best trade: <b>${escapeHtml(best.symbol || best.mint.slice(0, 8))}…</b> ${fmtPct(Number(best.pnl_percent))}`,
@@ -304,32 +311,39 @@ export async function sendPnl(chatId, query = null) {
     return query ? editMenuMessage(query, text, navKeyboard()) : bot.sendMessage(chatId, text, { parse_mode: 'HTML' });
   }
 
-  const wins = closed.filter(p => Number(p.pnl_percent || 0) > 0);
-  const losses = closed.filter(p => Number(p.pnl_percent || 0) < 0);
   const totalPnlSol = closed.reduce((s, p) => s + Number(p.pnl_sol || 0), 0);
-  const winRate = wins.length / closed.length * 100;
+  const pnlWins = closed.filter(p => (p.exit_class || (Number(p.pnl_percent || 0) > 0 ? 'win' : 'loss')) === 'win');
+  const pnlNeutrals = closed.filter(p => p.exit_class === 'neutral');
+  const pnlLosses = closed.filter(p => (p.exit_class || (Number(p.pnl_percent || 0) > 0 ? 'win' : 'loss')) === 'loss');
+  const netScore = pnlWins.length - pnlLosses.length;
+  const netIcon = netScore > 0 ? '✅' : netScore < 0 ? '⚠️' : '➡️';
+  const total = closed.length;
+  const pct = n => `${Math.round(n / total * 100)}%`;
 
   const byRoute = new Map();
   for (const pos of closed) {
     let snap = {};
     try { snap = JSON.parse(pos.snapshot_json || '{}'); } catch { /* */ }
     const route = snap.candidate?.signals?.route || snap.candidate?.signals?.label || 'unknown';
-    const row = byRoute.get(route) || { route, count: 0, wins: 0, pnlSum: 0 };
+    const exitClass = pos.exit_class || (Number(pos.pnl_percent || 0) > 0 ? 'win' : 'loss');
+    const row = byRoute.get(route) || { route, count: 0, wins: 0, neutrals: 0, pnlSum: 0 };
     row.count += 1;
-    row.wins += Number(pos.pnl_percent || 0) > 0 ? 1 : 0;
+    row.wins += exitClass === 'win' ? 1 : 0;
+    row.neutrals += exitClass === 'neutral' ? 1 : 0;
     row.pnlSum += Number(pos.pnl_percent || 0);
     byRoute.set(route, row);
   }
   const routeLines = [...byRoute.values()]
     .sort((a, b) => b.pnlSum - a.pnlSum)
-    .map(r => `• ${escapeHtml(r.route)}: ${r.wins}/${r.count} wins · avg ${fmtPct(r.pnlSum / r.count)}`);
+    .map(r => `• ${escapeHtml(r.route)}: ${r.wins}W/${r.neutrals}N/${r.count - r.wins - r.neutrals}L · avg ${fmtPct(r.pnlSum / r.count)}`);
 
   const lines = [
     '📊 <b>PnL</b>',
     '',
     `Total SOL: <b>${fmtSol(totalPnlSol)} SOL</b>`,
-    `Trades: <b>${closed.length}</b> · Wins: <b>${wins.length}</b> · Losses: <b>${losses.length}</b>`,
-    `Win rate: <b>${fmtPct(winRate)}</b>`,
+    `Trades: <b>${total}</b>`,
+    `✅ Wins: <b>${pnlWins.length}</b> (${pct(pnlWins.length)}) · ⚖️ Neutral: <b>${pnlNeutrals.length}</b> (${pct(pnlNeutrals.length)}) · ❌ Losses: <b>${pnlLosses.length}</b> (${pct(pnlLosses.length)})`,
+    `Net score: <b>${netScore > 0 ? '+' : ''}${netScore}</b> ${netIcon}`,
     '',
     '<b>By route:</b>',
     ...routeLines,
