@@ -149,14 +149,16 @@ export async function sendPositionOpen(positionId) {
 
   const lines = [
     header,
+    '',
     `🪙 Token: <b>$${symbol}</b>`,
-    `<code>${position.mint}</code>`,
+    `📋 CA: <code>${position.mint}</code>`,
     `📊 McAp: <b>${fmtUsd(position.entry_mcap || metrics.marketCapUsd)}</b>`,
     `🔗 Sources: <b>${sourceLine}</b>`,
   ];
 
   if (safetyScore !== null) {
     const safetyIcon = safetyPassed ? '✅' : '⚠️';
+    lines.push('');
     lines.push(`🛡️ Safety Score: <b>${safetyScore}/100 ${safetyIcon}</b>`);
     const details = [];
     details.push(`Deployer: ${rugCount === 0 ? 'Clean (0 rugs) ✅' : `${rugCount} rug${rugCount !== 1 ? 's' : ''} ⚠️`}${walletAgeDays != null ? ` · ${walletAgeDays}d old` : ''}`);
@@ -167,6 +169,7 @@ export async function sendPositionOpen(positionId) {
     details.forEach((d, i) => lines.push(`${i === details.length - 1 ? '└' : '├'} ${d}`));
   }
 
+  lines.push('');
   lines.push(`📈 Strategy: <b>${escapeHtml(stratId || 'degen')}</b>`);
   if (maxHoldMin) lines.push(`⏱️ Max Hold: <b>${maxHoldMin} min</b>`);
   lines.push(`🎯 Target: <b>+${position.tp_percent}%</b>`);
