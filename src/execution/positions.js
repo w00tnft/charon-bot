@@ -339,6 +339,18 @@ async function maybeAutoLearn() {
   await autoRunLearning(milestone);
 }
 
+function recordCapitalSnapshot() {
+  try {
+    const baseSol = numSetting('starting_capital_sol', 1.0);
+    const { s: totalPnl } = db.prepare("SELECT COALESCE(SUM(pnl_sol),0) AS s FROM dry_run_positions WHERE status='closed'").get();
+    const capital = baseSol + Number(totalPnl);
+    const { c: tradeNumber } = db.prepare("SELECT COUNT(*) AS c FROM dry_run_positions WHERE status='closed'").get();
+    db.prepare('INSERT INTO capital_snapshots (capital_sol, trade_number) VALUES (?, ?)').run(capital, tradeNumber);
+  } catch (err) {
+    console.log(`[report] snapshot error: ${err.message}`);
+  }
+}
+
 function extractDeployer(result) {
   try {
     const snap = JSON.parse(result.snapshot_json || '{}');
@@ -421,5 +433,8 @@ export async function monitorPositions() {
       }
     }
   }
-  if (anyExit) await maybeAutoLearn().catch(err => console.log(`[learning] auto-trigger error: ${err.message}`));
+  if (anyExit) {
+    await maybeAutoLearn().catch(err => console.log(`[learning] auto-trigger error: ${err.message}`));
+    recordCapitalSnapshot();
+  }
 }

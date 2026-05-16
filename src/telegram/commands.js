@@ -28,6 +28,7 @@ import { executeLiveSell } from '../execution/router.js';
 import { handleCallback, editMenuMessage } from './callbacks.js';
 import { consumeNumericFilterInput } from './input.js';
 import { getBlacklist } from '../db/blacklist.js';
+import { sendDailyReport } from './report.js';
 import { runLearning, sendLessons } from '../learning/commands.js';
 
 export async function handleMessage(msg) {
@@ -76,6 +77,10 @@ export async function handleMessage(msg) {
     return bot.sendMessage(chatId, `Updated ${id}.${key} = ${value}\n\n${strategyMenuText()}`, { parse_mode: 'HTML' });
   }
   if (text.startsWith('/blacklist')) return sendBlacklistReport(chatId);
+  if (text.startsWith('/report')) {
+    await bot.sendMessage(chatId, '⚡ Generating report...');
+    return sendDailyReport();
+  }
   if (text.startsWith('/summary')) return sendSummary(chatId);
   if (text.startsWith('/pnl')) return sendPnl(chatId);
   if (text.startsWith('/learn')) {
@@ -246,6 +251,7 @@ export function setupTelegram() {
     { command: 'positions', description: 'Show dry-run positions' },
     { command: 'candidate', description: 'Show candidate by mint' },
     { command: 'filters', description: 'Show filters' },
+    { command: 'report', description: 'Generate daily performance report' },
     { command: 'blacklist', description: 'Show blacklisted tokens and banned deployers' },
     { command: 'summary', description: 'Trading summary: win rate, PnL, best/worst trades' },
     { command: 'pnl', description: 'PnL breakdown by route and totals' },

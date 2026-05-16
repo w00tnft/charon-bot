@@ -40,6 +40,7 @@ export const SIGNAL_SERVER_KEY = process.env.SIGNAL_SERVER_KEY || '';
 export const SIGNAL_POLL_MS = Number(process.env.SIGNAL_POLL_MS || 30_000);
 export const LPAGENT_API_KEY = process.env.LPAGENT_API_KEY || '';
 export const LPAGENT_BASE_URL = 'https://api.lpagent.io/open-api/v1';
+export const REPORT_INTERVAL_MS = Number(process.env.REPORT_INTERVAL_MS || 24 * 60 * 60 * 1000);
 
 export const JSON_HEADERS = {
   Accept: 'application/json, text/plain, */*',
