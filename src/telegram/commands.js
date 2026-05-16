@@ -268,7 +268,7 @@ async function sendMenu(chatId = TELEGRAM_CHAT_ID) {
   });
 }
 
-async function sendPnl(chatId, query = null) {
+export async function sendPnl(chatId, query = null) {
   const wallets = savedWallets();
   if (!wallets.length) {
     const text = '📊 <b>PnL</b>\n\nNo saved wallets. Use /walletadd &lt;label&gt; &lt;address&gt;.';
