@@ -6,6 +6,19 @@ import { db } from '../db/connection.js';
 import { summarizeLearningWindow } from './summary.js';
 import { generateLessons, storeLearningRun } from './lessons.js';
 import { learningReportText } from './report.js';
+import { recalculateWeights, allRouteWeights } from './weights.js';
+
+function weightsText(weights) {
+  const lines = ['📊 <b>ROUTE WEIGHTS UPDATED</b>'];
+  for (const w of weights) {
+    const wt = Number(w.weight);
+    const icon = wt >= 1.5 ? '🔥' : wt >= 1.0 ? '✅' : wt >= 0.7 ? '⚠️' : '❌';
+    const mark = wt >= 1.0 ? ' ✅' : '';
+    lines.push(`${icon} ${escapeHtml(w.route)}: ${wt.toFixed(1)}x${mark}`);
+  }
+  if (weights.length === 0) lines.push('No closed positions yet — weights remain at default 1.0x');
+  return lines.join('\n');
+}
 
 export async function runLearning(chatId, windowArg = '12h') {
   const windowMs = parseWindowMs(windowArg);
@@ -13,10 +26,15 @@ export async function runLearning(chatId, windowArg = '12h') {
   const summary = summarizeLearningWindow(windowMs);
   const { lessons, raw } = await generateLessons(summary);
   const runId = storeLearningRun(windowMs, summary, lessons, raw);
-  return bot.sendMessage(chatId, learningReportText(runId, summary, lessons), {
+  await bot.sendMessage(chatId, learningReportText(runId, summary, lessons), {
     parse_mode: 'HTML',
     disable_web_page_preview: true,
   });
+  const updated = recalculateWeights();
+  const weights = updated.length > 0 ? updated.map(r => ({
+    route: r.route, weight: r.weight,
+  })) : allRouteWeights();
+  return bot.sendMessage(chatId, weightsText(weights), { parse_mode: 'HTML' });
 }
 
 export async function autoRunLearning(milestone) {
@@ -26,6 +44,8 @@ export async function autoRunLearning(milestone) {
   const runId = storeLearningRun(windowMs, summary, lessons, raw);
   await sendTelegram(`🧠 <b>Charon learning triggered</b> — reviewing last ${milestone} trades`);
   await sendTelegram(learningReportText(runId, summary, lessons));
+  recalculateWeights();
+  await sendTelegram(weightsText(allRouteWeights()));
 }
 
 export async function sendLessons(chatId) {

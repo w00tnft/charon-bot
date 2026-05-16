@@ -6,6 +6,7 @@ import { fetchSavedWalletExposure } from '../enrichment/wallets.js';
 import { fetchTwitterNarrative } from '../enrichment/twitter.js';
 import { gmgnLink } from '../format.js';
 import { calculateSafetyScore, checkDeployerHistory } from '../safety.js';
+import { getRouteWeight, toCanonicalRoute } from '../learning/weights.js';
 
 export function buildFeeSnapshot(fee, signature) {
   return {
@@ -211,6 +212,15 @@ export async function buildCandidate({ mint, fee = null, signature = null, gradu
     deployerHistory,
     deployerAddress,
   };
+
+  // Apply historical route weight to safety score
+  const routeWeight = getRouteWeight(signalRoute);
+  if (routeWeight !== 1.0) {
+    const rawScore = candidate.safety.score;
+    const weightedScore = Math.min(100, Math.round(rawScore * routeWeight));
+    candidate.safety = { ...candidate.safety, score: weightedScore, passed: weightedScore >= 65, routeWeight };
+    console.log(`[weights] ${toCanonicalRoute(signalRoute)} ${routeWeight.toFixed(2)}x → score ${rawScore} → ${weightedScore}`);
+  }
 
   const safetyIcon = candidate.safety.passed ? '✅' : '❌';
   const topFlags = candidate.safety.flags.slice(0, 3).join(', ');
