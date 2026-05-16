@@ -105,7 +105,7 @@ export async function handleCallback(query) {
       await executeLiveBuy(row, decision, 'manual', [row], row.id);
       return;
     }
-    const positionId = await createDryRunPosition(row.id, candidate, decision, 'manual_buy');
+    const { id: positionId } = createDryRunPosition(row.id, candidate, decision, 'manual_buy');
     logDecisionEvent({
       batchId: 'manual',
       triggerCandidateId: row.id,

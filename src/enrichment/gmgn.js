@@ -4,6 +4,7 @@ import { now, sleep } from '../utils.js';
 import { numSetting, setting } from '../db/settings.js';
 
 const gmgnCache = new Map();
+const GMGN_CACHE_MAX = 500;
 let lastGmgnRequestAt = 0;
 let gmgnQueue = Promise.resolve();
 const gmgnBackoff = {
@@ -156,6 +157,7 @@ async function fetchGmgnTokenInfo(mint, useCache = true) {
       params: { chain: 'sol', address: mint },
     });
     const data = payload?.data?.data || payload?.data || payload;
+    if (gmgnCache.size >= GMGN_CACHE_MAX) gmgnCache.delete(gmgnCache.keys().next().value);
     gmgnCache.set(mint, { at: now(), data });
     return data;
   } catch (err) {
