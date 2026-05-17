@@ -61,20 +61,32 @@ export function recalculateWeights() {
   const results = [];
   for (const [route, row] of byRoute.entries()) {
     if (row.count === 0) continue;
+
+    // Insufficient data — keep neutral 1.0x to avoid skewing scores
+    if (row.count < 10) {
+      upsert.run(route, row.wins, row.losses, row.pnlSum / row.count, 1.0, now());
+      results.push({ route, weight: 1.0, winRate: 0, avgPnl: row.pnlSum / row.count, count: row.count, wins: row.wins, neutrals: row.neutrals, losses: row.losses, insufficient: true });
+      continue;
+    }
+
     const decisive = row.wins + row.losses; // neutrals excluded from win rate
     const winRate = decisive > 0 ? row.wins / decisive : 0.5;
     const neutralRate = row.neutrals / row.count;
     const avgPnl = row.pnlSum / row.count;
     const weight = clamp(
       (winRate * (avgPnl / 100)) - (neutralRate * 0.1),
-      0.5, 2.0,
+      0.75, 1.5,
     );
     upsert.run(route, row.wins, row.losses, avgPnl, weight, now());
     results.push({ route, weight, winRate: winRate * 100, avgPnl, count: row.count, wins: row.wins, neutrals: row.neutrals, losses: row.losses });
   }
 
   if (results.length > 0) {
-    console.log('[weights] ' + results.map(r => `${r.route}: ${r.weight.toFixed(2)}x`).join(' | '));
+    console.log('[weights] ' + results.map(r =>
+      r.insufficient
+        ? `${r.route}: 1.00x (insufficient data — ${r.count}/10 trades)`
+        : `${r.route}: ${r.weight.toFixed(2)}x`
+    ).join(' | '));
   }
   return results;
 }

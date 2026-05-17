@@ -248,6 +248,9 @@ export function initDb() {
   for (const route of ['fee_claim', 'graduated', 'trending', 'multi_source', 'single_source']) {
     weightInsert.run(route, Date.now());
   }
+  // Reset any weights below the minimum floor (0.75) — fixes crash-period weight deadlocks
+  const resetCount = db.prepare('UPDATE route_weights SET weight = 1.0 WHERE weight < 0.75').run().changes;
+  if (resetCount > 0) console.log(`[weights] reset ${resetCount} route weight(s) below floor to 1.0x`);
 
   const defaults = {
     agent_enabled: 'true',
