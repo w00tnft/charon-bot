@@ -2,6 +2,7 @@ import { db } from '../db/connection.js';
 import { sendTelegram } from './send.js';
 import { numSetting, setSetting } from '../db/settings.js';
 import { allRouteWeights } from '../learning/weights.js';
+import { escapeHtml } from '../format.js';
 
 export function generateSparkline(values) {
   if (!values || values.length < 2) return '▄▄▄▄';
@@ -162,7 +163,7 @@ export function generateDailyReport() {
   ];
 
   if (best) {
-    const bestSym = best.symbol || (best.mint || '').slice(0, 8);
+    const bestSym = escapeHtml(best.symbol || (best.mint || '').slice(0, 8));
     lines.push('');
     lines.push('🏆 BEST TRADE');
     lines.push(`▸ $${bestSym}`);
@@ -171,7 +172,7 @@ export function generateDailyReport() {
   }
 
   if (worst && worst !== best && totalToday > 1) {
-    const worstSym = worst.symbol || (worst.mint || '').slice(0, 8);
+    const worstSym = escapeHtml(worst.symbol || (worst.mint || '').slice(0, 8));
     lines.push('');
     lines.push('💀 WORST TRADE');
     lines.push(`▸ $${worstSym}`);
@@ -215,8 +216,24 @@ export function generateDailyReport() {
 }
 
 export async function sendDailyReport() {
-  const report = generateDailyReport();
-  await sendTelegram(report);
-  setSetting('last_report_sent_ms', String(Date.now()));
-  console.log('[report] daily report sent');
+  let report;
+  try {
+    report = generateDailyReport();
+  } catch (err) {
+    console.error('[report] generateDailyReport error:', err);
+    report = `⚡ CHARON DAILY REPORT\n\n⚠️ Report generation failed:\n${err.message}\n\nCheck logs for details.`;
+  }
+  try {
+    await sendTelegram(report);
+    setSetting('last_report_sent_ms', String(Date.now()));
+    console.log('[report] daily report sent');
+  } catch (err) {
+    console.error('[report] sendTelegram error:', err);
+    // Try sending a plain-text fallback without HTML parse mode
+    try {
+      await sendTelegram('Report error: ' + err.message, { parse_mode: undefined });
+    } catch {
+      console.error('[report] fallback send also failed');
+    }
+  }
 }
