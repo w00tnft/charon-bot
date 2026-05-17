@@ -233,8 +233,15 @@ export async function buildCandidate({ mint, fee = null, signature = null, gradu
   if (routeWeight !== 1.0) {
     const rawScore = candidate.safety.score;
     const weightedScore = Math.min(100, Math.round(rawScore * routeWeight));
-    candidate.safety = { ...candidate.safety, score: weightedScore, passed: weightedScore >= 65, routeWeight };
-    console.log(`[weights] ${toCanonicalRoute(signalRoute)} ${routeWeight.toFixed(2)}x → score ${rawScore} → ${weightedScore}`);
+    // Safety net: if the weight would push ALL tokens below 50 it means the weight
+    // data is bad (crash-period losses, insufficient samples). Fall back to raw score.
+    if (weightedScore < 50) {
+      console.log(`[weights] WARNING ${toCanonicalRoute(signalRoute)} ${routeWeight.toFixed(2)}x would drop score ${rawScore} → ${weightedScore} — using raw score (weight floor triggered)`);
+      candidate.safety = { ...candidate.safety, routeWeight };
+    } else {
+      candidate.safety = { ...candidate.safety, score: weightedScore, passed: weightedScore >= 65, routeWeight };
+      console.log(`[weights] ${toCanonicalRoute(signalRoute)} ${routeWeight.toFixed(2)}x → score ${rawScore} → ${weightedScore}`);
+    }
   }
 
   // Whitelist deployer bonus (+15)
