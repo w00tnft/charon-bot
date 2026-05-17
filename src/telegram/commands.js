@@ -79,7 +79,13 @@ export async function handleMessage(msg) {
   if (text.startsWith('/blacklist')) return sendBlacklistReport(chatId);
   if (text.startsWith('/report')) {
     await bot.sendMessage(chatId, '⚡ Generating report...');
-    return sendDailyReport();
+    try {
+      await sendDailyReport();
+    } catch (err) {
+      console.error('[report] crash:', err);
+      await sendTelegram('⚠️ Report failed: ' + err.message).catch(() => {});
+    }
+    return;
   }
   if (text.startsWith('/summary')) return sendSummary(chatId);
   if (text.startsWith('/pnl')) return sendPnl(chatId);
