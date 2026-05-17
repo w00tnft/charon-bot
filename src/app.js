@@ -8,10 +8,21 @@ import { processCandidateFromSignals, maybeProcessDegenCandidate } from './pipel
 import { sendTelegram, probeTelegram } from './telegram/send.js';
 import { sendDailyReport } from './telegram/report.js';
 import { numSetting } from './db/settings.js';
+import { runCleanup, isDueForCleanup } from './db/cleanup.js';
 import { makeFailureTracker } from './utils.js';
 
 setDefaultResultOrder('ipv4first');
 validateConfig();
+
+process.on('SIGTERM', () => {
+  console.log('[app] SIGTERM received, shutting down gracefully...');
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('[app] SIGINT received, shutting down...');
+  process.exit(0);
+});
 
 export async function startCharon() {
   initDb();
@@ -64,8 +75,13 @@ export async function startCharon() {
   const trackPositions = makeFailureTracker('position monitor', (msg) => sendTelegram(msg));
   setInterval(() => trackPositions(() => monitorPositions()), POSITION_CHECK_MS);
 
-  // Daily report scheduler — checks every hour
-  const checkDailyReport = async () => {
+  // Hourly maintenance: memory health, daily report, DB cleanup
+  const hourlyMaintenance = async () => {
+    // Memory health
+    const mb = Math.round(process.memoryUsage().rss / 1024 / 1024);
+    console.log(`[health] Memory: ${mb}MB rss`);
+
+    // Daily report
     const lastSent = numSetting('last_report_sent_ms', 0);
     const nextDue = lastSent + REPORT_INTERVAL_MS;
     if (Date.now() >= nextDue) {
@@ -76,7 +92,12 @@ export async function startCharon() {
       const m = Math.floor((remaining % 3_600_000) / 60_000);
       console.log(`[report] next report in ${h}h ${m}m`);
     }
+
+    // Daily DB cleanup
+    if (isDueForCleanup()) {
+      try { runCleanup(); } catch (err) { console.log(`[cleanup] error: ${err.message}`); }
+    }
   };
-  setInterval(() => checkDailyReport().catch(() => {}), 60 * 60 * 1000);
-  checkDailyReport().catch(() => {});
+  setInterval(() => hourlyMaintenance().catch(err => console.log(`[maintenance] ${err.message}`)), 60 * 60 * 1000);
+  hourlyMaintenance().catch(() => {});
 }
