@@ -14,14 +14,27 @@ import { makeFailureTracker } from './utils.js';
 setDefaultResultOrder('ipv4first');
 validateConfig();
 
-process.on('SIGTERM', () => {
-  console.log('[app] SIGTERM received, shutting down gracefully...');
-  process.exit(0);
-});
+// Central interval registry — cleared on SIGTERM/SIGINT
+const intervals = [];
+function addInterval(fn, ms) {
+  intervals.push(setInterval(fn, ms));
+}
 
-process.on('SIGINT', () => {
-  console.log('[app] SIGINT received, shutting down...');
+function shutdown(signal) {
+  console.log(`[app] ${signal} received, clearing ${intervals.length} intervals and shutting down...`);
+  for (const id of intervals) clearInterval(id);
   process.exit(0);
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT',  () => shutdown('SIGINT'));
+
+// Prevent unhandled async errors from silently killing the process
+process.on('unhandledRejection', (err) => {
+  console.error('[app] unhandledRejection:', err?.message ?? err);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[app] uncaughtException:', err?.message ?? err);
 });
 
 export async function startCharon() {
@@ -42,14 +55,14 @@ export async function startCharon() {
     const trackDip = makeFailureTracker('dip monitor', alert);
 
     await fetchServerSignals().catch(error => console.log(`[server] initial fetch failed: ${error.message}`));
-    setInterval(() => trackServer(() => fetchServerSignals()), SIGNAL_POLL_MS);
+    addInterval(() => trackServer(() => fetchServerSignals()), SIGNAL_POLL_MS);
 
     // Price monitor for dip buy strategy
     const { monitorPriceAlerts, cleanupAlerts } = await import('./signals/priceMonitor.js');
     const { setCandidateHandler: setAlertHandler } = await import('./signals/priceMonitor.js');
     setAlertHandler(processCandidateFromSignals);
-    setInterval(() => trackDip(() => monitorPriceAlerts()), 10_000);
-    setInterval(() => cleanupAlerts(), 60 * 60 * 1000);
+    addInterval(() => trackDip(() => monitorPriceAlerts()), 10_000);
+    addInterval(() => cleanupAlerts(), 60 * 60 * 1000);
 
     console.log(`[bot] ${APP_NAME} started (server mode: ${SIGNAL_SERVER_URL})`);
   } else {
@@ -64,8 +77,8 @@ export async function startCharon() {
     await fetchGraduatedCoins().catch(error => console.log(`[graduated] initial fetch failed: ${error.message}`));
     await fetchGmgnTrending().catch(error => console.log(`[trending] initial fetch failed: ${error.message}`));
 
-    setInterval(() => fetchGraduatedCoins().catch(error => console.log(`[graduated] ${error.message}`)), GRADUATED_POLL_MS);
-    setInterval(() => fetchGmgnTrending().catch(error => console.log(`[trending] ${error.message}`)), TRENDING_POLL_MS);
+    addInterval(() => fetchGraduatedCoins().catch(error => console.log(`[graduated] ${error.message}`)), GRADUATED_POLL_MS);
+    addInterval(() => fetchGmgnTrending().catch(error => console.log(`[trending] ${error.message}`)), TRENDING_POLL_MS);
     startWebsocket();
 
     console.log(`[bot] ${APP_NAME} started (standalone mode)`);
@@ -73,13 +86,18 @@ export async function startCharon() {
 
   // Position monitoring runs in both modes
   const trackPositions = makeFailureTracker('position monitor', (msg) => sendTelegram(msg));
-  setInterval(() => trackPositions(() => monitorPositions()), POSITION_CHECK_MS);
+  addInterval(() => trackPositions(() => monitorPositions()), POSITION_CHECK_MS);
 
-  // Hourly maintenance: memory health, daily report, DB cleanup
+  // Hourly maintenance: memory health + guard, daily report, DB cleanup
   const hourlyMaintenance = async () => {
-    // Memory health
     const mb = Math.round(process.memoryUsage().rss / 1024 / 1024);
     console.log(`[health] Memory: ${mb}MB rss`);
+
+    // Memory guard: exit cleanly so Railway auto-restarts rather than OOM-crashing
+    if (mb > 450) {
+      console.log(`[health] Memory ${mb}MB > 450MB limit — exiting for clean restart`);
+      shutdown('MEMGUARD');
+    }
 
     // Daily report
     const lastSent = numSetting('last_report_sent_ms', 0);
@@ -98,6 +116,6 @@ export async function startCharon() {
       try { runCleanup(); } catch (err) { console.log(`[cleanup] error: ${err.message}`); }
     }
   };
-  setInterval(() => hourlyMaintenance().catch(err => console.log(`[maintenance] ${err.message}`)), 60 * 60 * 1000);
+  addInterval(() => hourlyMaintenance().catch(err => console.log(`[maintenance] ${err.message}`)), 60 * 60 * 1000);
   hourlyMaintenance().catch(() => {});
 }
