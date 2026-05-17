@@ -49,6 +49,11 @@ export async function fetchServerSignals() {
       if (now() - (coin.seenAt || 0) > 2 * 60 * 60_000) graduated.delete(mint);
     }
 
+    // Prune trending map — only pruned here in server mode (fetchGmgnTrending not called)
+    for (const [mint, token] of trending) {
+      if (now() - (token.seenAt || 0) > 2 * 60 * 60_000) trending.delete(mint);
+    }
+
     const strat = activeStrategy();
     let processed = 0;
     let triggered = 0;

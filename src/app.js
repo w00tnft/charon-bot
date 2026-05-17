@@ -90,12 +90,20 @@ export async function startCharon() {
 
   // Hourly maintenance: memory health + guard, daily report, DB cleanup
   const hourlyMaintenance = async () => {
-    const mb = Math.round(process.memoryUsage().rss / 1024 / 1024);
-    console.log(`[health] Memory: ${mb}MB rss`);
+    const mem = process.memoryUsage();
+    const heapMb = Math.round(mem.heapUsed / 1024 / 1024);
+    const rssMb  = Math.round(mem.rss       / 1024 / 1024);
+    console.log(`[health] Memory: heap=${heapMb}MB rss=${rssMb}MB`);
 
-    // Memory guard: exit cleanly so Railway auto-restarts rather than OOM-crashing
-    if (mb > 450) {
-      console.log(`[health] Memory ${mb}MB > 450MB limit — exiting for clean restart`);
+    // Tier 1: high heap — run DB cleanup early to reclaim memory
+    if (heapMb > 400) {
+      console.log(`[health] Heap ${heapMb}MB > 400MB — forcing early cleanup`);
+      try { runCleanup(); } catch (err) { console.log(`[cleanup] ${err.message}`); }
+    }
+
+    // Tier 2: RSS critical — exit cleanly so Railway auto-restarts
+    if (rssMb > 450) {
+      console.log(`[health] RSS ${rssMb}MB > 450MB — exiting for clean restart`);
       shutdown('MEMGUARD');
     }
 
