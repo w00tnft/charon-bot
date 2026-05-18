@@ -469,9 +469,14 @@ export function initDb() {
       ` | swaps ${cfg.trending_min_swaps}` +
       ` | safety ${cfg.min_safety_score}` +
       ` | max_positions ${cfg.max_open_positions}` +
-      ` | hold ${cfg.max_hold_ms / 60000}min`
+      ` | hold ${cfg.max_hold_ms / 60000}min` +
+      ` | use_llm ${cfg.use_llm}`
     );
   }
+
+  // Log agent gate settings so misconfigurations are visible at startup
+  const agentEnabled = db.prepare("SELECT value FROM settings WHERE key = 'agent_enabled'").get()?.value ?? 'true (default)';
+  console.log(`[config] agent_enabled: ${agentEnabled}`);
 }
 
 export function ensureColumn(table, column, ddl) {
