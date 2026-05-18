@@ -6,6 +6,16 @@ import { HELIUS_API_KEY } from '../config.js';
 let candidateHandler = null;
 export function setCandidateHandler(fn) { candidateHandler = fn; }
 
+// Non-meme tokens to skip — stablecoins, wrapped SOL, LSTs
+const SKIP_MINTS = new Set([
+  'So11111111111111111111111111111111111111112',  // WSOL
+  'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
+  'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', // USDT
+  'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So', // mSOL
+  'J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn', // jitoSOL
+  'bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1',  // bSOL
+]);
+
 // Deduplicate: don't fire the same wallet+mint twice per 10 minutes
 const seenSmartSignals = new Map(); // `${address}:${mint}` → timestamp
 
@@ -105,6 +115,7 @@ export async function pollSmartWallets() {
       console.log(`[smart] ${label}: ${swaps.length} recent swap(s) via ${source || 'none'}`);
 
       for (const { mint, symbol, buyAmount } of swaps) {
+        if (SKIP_MINTS.has(mint)) continue; // WSOL, stablecoins, LSTs
         const key = `${address}:${mint}`;
         if (seenSmartSignals.has(key)) continue;
         seenSmartSignals.set(key, now());
@@ -128,6 +139,8 @@ export async function pollSmartWallets() {
     } catch (err) {
       console.log(`[smart] ${label} (${address.slice(0, 8)}…): ${err.message}`);
     }
+    // Throttle between wallets to avoid Helius free-tier rate limit (429)
+    await new Promise(r => setTimeout(r, 500));
   }
 }
 
