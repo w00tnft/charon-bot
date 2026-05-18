@@ -48,8 +48,11 @@ export async function fetchBirdeyeScore(mint) {
   const volume1h = Number(overview?.v1hUSD ?? 0);
   const liquidity = Number(overview?.liquidity ?? 0);
 
-  const top10Pct = Number(security?.top10HolderPercent ?? 100);
-  const ownerPct = Number(security?.ownerPercentage ?? 100);
+  // API returns fractions (0–1); multiply by 100 to get percent. Default 1 (=100%) = conservative.
+  const top10Raw = Number(security?.top10HolderPercent ?? security?.top10UserPercent ?? 1);
+  const top10Pct = top10Raw <= 1 ? top10Raw * 100 : top10Raw;
+  const ownerRaw = Number(security?.ownerPercentage ?? security?.creatorPercentage ?? 1);
+  const ownerPct = ownerRaw <= 1 ? ownerRaw * 100 : ownerRaw;
   const isMutable = security?.mutableMetadata !== false; // false = immutable = good
 
   let score = 0;

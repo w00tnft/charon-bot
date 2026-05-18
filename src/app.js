@@ -93,8 +93,10 @@ export async function startCharon() {
   }
 
   // Smart money wallet polling (both modes, requires GMGN_API_KEY)
-  const { pollSmartWallets, setCandidateHandler: setSmartHandler } = await import('./feeds/smartmoney.js');
+  const { pollSmartWallets, setCandidateHandler: setSmartHandler, getSmartWallets } = await import('./feeds/smartmoney.js');
   setSmartHandler(processCandidateFromSignals);
+  const smartWalletCount = getSmartWallets().filter(w => w.active && w.address).length;
+  console.log(`[smart] starting — polling ${smartWalletCount} wallet(s) every ${SMART_MONEY_POLL_MS / 1000}s`);
   addInterval(() => pollSmartWallets().catch(err => console.log(`[smart] ${err.message}`)), SMART_MONEY_POLL_MS);
 
   // Position monitoring runs in both modes
