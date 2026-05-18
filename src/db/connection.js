@@ -458,6 +458,20 @@ export function initDb() {
     .map(([k, v]) => `json_set(config_json, '$.${k}', ${typeof v === 'number' ? v : `'${v}'`})`)
     .reduce((acc, expr) => `${expr.replace('config_json', acc)}`);
   db.prepare(`UPDATE strategies SET config_json = ${degenMigrationSql} WHERE id = 'degen'`).run();
+
+  // Log active degen config so we can confirm migration values on every startup
+  const degenRow = db.prepare("SELECT config_json FROM strategies WHERE id = 'degen'").get();
+  if (degenRow) {
+    const cfg = JSON.parse(degenRow.config_json);
+    console.log(
+      `[config] degen filters: mcap $${(cfg.min_mcap_usd / 1000).toFixed(0)}k-$${(cfg.max_mcap_usd / 1000).toFixed(0)}k` +
+      ` | vol $${cfg.trending_min_volume_usd}` +
+      ` | swaps ${cfg.trending_min_swaps}` +
+      ` | safety ${cfg.min_safety_score}` +
+      ` | rug ${cfg.trending_max_rug_ratio}` +
+      ` | bundler ${cfg.trending_max_bundler_rate}`
+    );
+  }
 }
 
 export function ensureColumn(table, column, ddl) {
