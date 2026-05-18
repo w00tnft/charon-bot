@@ -103,11 +103,15 @@ export function filterCandidate(candidate) {
     failures.push(`saved wallet holders: ${savedCount} < ${strat.min_saved_wallet_holders}`);
   }
 
-  // Safety score
+  // Safety score — route-aware minimum threshold
   if (strat.min_safety_score > 0 && candidate.safety) {
-    const { score, passed } = candidate.safety;
-    if (!passed || score < strat.min_safety_score) {
-      failures.push(`safety score: ${score}/100 < min ${strat.min_safety_score}`);
+    const { score } = candidate.safety;
+    const signalRoute = toCanonicalRoute(candidate.signals?.route);
+    const routeMinScores = strat.route_min_scores || {};
+    const routeMin = routeMinScores[signalRoute] ?? strat.min_safety_score;
+    if (score < routeMin) {
+      console.log(`[candidate] $${sym} BLOCKED — route: ${signalRoute} needs ${routeMin}, got ${score}`);
+      failures.push(`safety score: ${score}/100 < route min ${routeMin} (${signalRoute})`);
     }
   }
 
@@ -139,6 +143,12 @@ export function filterCandidate(candidate) {
     }
   }
 
+  if (failures.length === 0 && candidate.safety) {
+    const signalRoute = toCanonicalRoute(candidate.signals?.route);
+    const routeMinScores = strat.route_min_scores || {};
+    const routeMin = routeMinScores[signalRoute] ?? strat.min_safety_score;
+    console.log(`[candidate] $${sym} PASSED — route: ${signalRoute} | score: ${candidate.safety.score} | route_min: ${routeMin} ✅`);
+  }
   return { passed: failures.length === 0, failures, strategy: strat.id };
 }
 
@@ -247,6 +257,14 @@ export async function buildCandidate({ mint, fee = null, signature = null, gradu
       candidate.safety = { ...candidate.safety, score: weightedScore, passed: weightedScore >= 65, routeWeight };
       console.log(`[weights] ${toCanonicalRoute(signalRoute)} ${routeWeight.toFixed(2)}x → score ${rawScore} → ${weightedScore}`);
     }
+  }
+
+  // fee_trending route bonus (+15): historically best performing route
+  if (toCanonicalRoute(signalRoute) === 'fee_trending') {
+    const before = candidate.safety.score;
+    const boostedScore = Math.min(100, before + 15);
+    candidate.safety = { ...candidate.safety, score: boostedScore, passed: boostedScore >= 65 };
+    console.log(`[candidate] fee_trending bonus +15 → score ${before} → ${boostedScore}`);
   }
 
   // Whitelist deployer bonus (+15)
