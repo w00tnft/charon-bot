@@ -33,19 +33,27 @@ export async function processCandidateFromSignals(signals) {
   }
 
   const candidate = await buildCandidate(signals);
+  const sym = candidate.token.symbol || signals.mint.slice(0, 8);
   const signature = signals.signature || null;
   const candidateId = upsertCandidate(candidate, signature);
   if (!candidate.filters.passed) {
-    console.log(`[candidate] filtered ${candidate.token.mint.slice(0, 8)}... ${candidate.filters.failures.join('; ')}`);
+    console.log(`[candidate] filtered ${sym}: ${candidate.filters.failures.join('; ')}`);
     return;
   }
+
+  const mcapK = ((candidate.metrics?.marketCapUsd ?? 0) / 1000).toFixed(0);
+  console.log(`[candidate] $${sym} PASSED filters — score: ${candidate.safety?.score}/100, mcap: $${mcapK}k, strategy: ${candidate.filters.strategy}`);
 
   const strat = activeStrategy();
   let rows, batchDecision, batchId;
 
   if (!strat.use_llm) {
     const selfRow = candidateById(candidateId);
-    rows = selfRow ? [selfRow] : [];
+    if (!selfRow) {
+      console.log(`[agent] $${sym} — candidateById(${candidateId}) returned null, skipping`);
+      return;
+    }
+    rows = [selfRow];
     batchId = null;
     batchDecision = {
       verdict: 'BUY',
@@ -89,10 +97,15 @@ export async function processCandidateFromSignals(signals) {
 
   if (batchId) await sendBatchReveal(batchId, rows, batchDecision, candidateId);
 
-  if (selectedRow && boolSetting('agent_enabled', true) && batchDecision.verdict === 'BUY' && batchDecision.confidence >= numSetting('llm_min_confidence', 75)) {
+  const agentEnabled = boolSetting('agent_enabled', true);
+  const minConf = numSetting('llm_min_confidence', 75);
+  console.log(`[agent] $${sym} gate check — selectedRow: ${!!selectedRow}, agent_enabled: ${agentEnabled}, verdict: ${batchDecision.verdict}, confidence: ${batchDecision.confidence}/${minConf}`);
+
+  if (selectedRow && agentEnabled && batchDecision.verdict === 'BUY' && batchDecision.confidence >= minConf) {
     if (!canOpenMorePositions()) {
-      const max = numSetting('max_open_positions', 3);
-      console.log(`[agent] max open positions reached (${openPositionCount()}/${max}), skipping buy ${selectedRow.candidate.token.mint}`);
+      const strat2 = activeStrategy();
+      const max = strat2.max_open_positions ?? numSetting('max_open_positions', 3);
+      console.log(`[agent] max open positions reached (${openPositionCount()}/${max}), skipping buy $${sym}`);
       logDecisionEvent({
         batchId,
         triggerCandidateId: candidateId,
@@ -125,9 +138,12 @@ export async function processCandidateFromSignals(signals) {
 
 export async function handleApprovedBuy(selectedRow, decision, batchId, rows = [], triggerCandidateId = null) {
   const mode = tradingMode();
+  const sym2 = selectedRow.candidate?.token?.symbol || selectedRow.candidate?.token?.mint?.slice(0, 8) || '?';
+  console.log(`[agent] handleApprovedBuy $${sym2} — mode: ${mode}, refreshing candidate...`);
   const freshSelectedRow = await refreshCandidateForExecution(selectedRow);
   const executionRows = rows.map(row => row.id === freshSelectedRow.id ? freshSelectedRow : row);
   if (!freshSelectedRow.candidate.filters?.passed) {
+    console.log(`[agent] $${sym2} rejected on fresh check: ${(freshSelectedRow.candidate.filters?.failures || []).join('; ') || 'unknown'}`);
     updateCandidateStatus(freshSelectedRow.id, 'stale_rejected');
     logDecisionEvent({
       batchId,
@@ -177,6 +193,7 @@ export async function handleApprovedBuy(selectedRow, decision, batchId, rows = [
         return;
       }
     }
+    console.log(`[agent] DRY-RUN opening $${sym2} — score: ${freshSelectedRow.candidate.safety?.score}/100, mcap: $${((freshSelectedRow.candidate.metrics?.marketCapUsd ?? 0) / 1000).toFixed(0)}k`);
     const { id: positionId, isNew } = createDryRunPosition(freshSelectedRow.id, freshSelectedRow.candidate, decision, `llm_batch_${batchId}`);
     logDecisionEvent({
       batchId,
