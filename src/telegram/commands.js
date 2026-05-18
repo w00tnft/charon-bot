@@ -145,9 +145,10 @@ export async function handleMessage(msg) {
     }
 
     if (isSelective && isConfirm) {
+      console.log('[resetstats] selective confirm received');
       // Selective reset — wipe trades, keep learning
       const tradesBefore = db.prepare("SELECT COUNT(*) AS c FROM dry_run_trades").get().c;
-      const lessonsBefore = db.prepare("SELECT COUNT(*) AS c FROM learning_lessons WHERE active = 1").get().c;
+      const lessonsBefore = db.prepare("SELECT COUNT(*) AS c FROM learning_lessons WHERE status = 'active'").get().c;
       const blCount = db.prepare("SELECT COUNT(*) AS c FROM blacklist").get().c;
       const swCount = db.prepare("SELECT COUNT(*) AS c FROM smart_wallets WHERE active = 1").get().c;
 
