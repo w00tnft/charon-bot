@@ -169,7 +169,17 @@ export async function sendPositionOpen(positionId) {
   lines.push('');
   lines.push(`📈 Strategy: <b>${escapeHtml(stratId || 'degen')}</b>`);
 
-  if (strat.partial_exit_pct != null) {
+  if (strat.exit_type === 'full') {
+    // Full-exit system: flat TP, no runner
+    const tpPct = strat.take_profit_pct ?? 15;
+    const hardPct = strat.hard_stop_pct ?? 25;
+    const emergencyPct = strat.emergency_stop_pct ?? 40;
+    const maxHoldMin = strat.max_hold_ms ? Math.round(strat.max_hold_ms / 60000) : null;
+    const sizeSol = strat.position_size_sol ?? 0.05;
+    lines.push(`🎯 TP: <b>+${tpPct}% full exit</b>`);
+    lines.push(`🛑 Stop: <b>−${hardPct}%</b> | Emergency: <b>−${emergencyPct}%</b>`);
+    if (maxHoldMin) lines.push(`⏱️ Max: <b>${maxHoldMin}min</b> | 💰 Size: <b>${sizeSol} SOL</b>`);
+  } else if (strat.partial_exit_pct != null) {
     // New partial-exit + trailing-stop system
     const exitPct = strat.partial_exit_pct ?? 30;
     const exitSize = Math.round((strat.partial_exit_size ?? 0.60) * 100);
