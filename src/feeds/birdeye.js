@@ -34,19 +34,25 @@ export async function fetchBirdeyeScore(mint) {
   const priceChange1h = Number(overview.priceChange1hPercent ?? 0);
   const volume1h = Number(overview.v1hUSD ?? 0);
 
-  // Max bonus: +20 (free-tier overview only; security endpoint requires premium)
   let score = 0;
   if (holders > 500) score += 10;
   else if (holders > 100) score += 5;
   if (volume1h > 50_000) score += 10;
   else if (volume1h > 10_000) score += 5;
-  if (priceChange1h > 0) score += 5;
 
-  if (score > 0) {
+  // Momentum tiers — penalties cancel bonus but don't go below 0 (caller does Math.max(0,…))
+  if (priceChange1h > 200) score += 5;
+  else if (priceChange1h > 50) score += 3;
+  else if (priceChange1h > 0) score += 2;
+  else if (priceChange1h < -80) score -= 10;
+  else if (priceChange1h < -50) score -= 5;
+
+  const capped = Math.min(score, 20);
+  if (capped > 0) {
     console.log(
-      `[birdeye] +${score}/20 | ` +
+      `[birdeye] +${capped}/20 | ` +
       `holders: ${holders}, vol1h: $${Math.round(volume1h / 1000)}k, Δ1h: ${priceChange1h.toFixed(1)}%`
     );
   }
-  return score;
+  return capped;
 }

@@ -16,17 +16,24 @@ function pruneSeenSmartSignals() {
   }
 }
 
-async function fetchWalletSwaps(address) {
+async function fetchWalletSwaps(address, { verbose = false } = {}) {
   // Primary: Helius enhanced transactions API (no Cloudflare blocking)
   if (HELIUS_API_KEY) {
+    const url = `https://api.helius.xyz/v0/addresses/${address}/transactions`;
+    if (verbose) console.log(`[smart] calling: ${url}?api-key=***&limit=10&type=SWAP`);
     try {
-      const r = await axios.get(`https://api.helius.xyz/v0/addresses/${address}/transactions`, {
+      const r = await axios.get(url, {
         params: { 'api-key': HELIUS_API_KEY, limit: 10, type: 'SWAP' },
         timeout: 5_000,
       });
-      return { source: 'helius', txs: r.data || [] };
+      const txs = r.data || [];
+      if (verbose) {
+        console.log(`[smart] test response: status=200 length=${txs.length} firstTx=${JSON.stringify(txs[0] || {}).slice(0, 120)}`);
+      }
+      return { source: 'helius', txs };
     } catch (err) {
-      console.log(`[smart] helius ${address.slice(0, 8)}: ${err.response?.status || ''} ${err.message}`);
+      if (verbose) console.log(`[smart] test response: status=${err.response?.status || 'err'} ${err.message}`);
+      else console.log(`[smart] helius ${address.slice(0, 8)}: ${err.response?.status || ''} ${err.message}`);
     }
   }
 
@@ -122,6 +129,22 @@ export async function pollSmartWallets() {
       console.log(`[smart] ${label} (${address.slice(0, 8)}…): ${err.message}`);
     }
   }
+}
+
+export async function testSmartMoneyConnection() {
+  if (!HELIUS_API_KEY) {
+    console.log('[smart] test skipped — HELIUS_API_KEY not set');
+    return;
+  }
+  const first = db.prepare(
+    "SELECT address, label FROM smart_wallets WHERE active = 1 AND address IS NOT NULL LIMIT 1"
+  ).get();
+  if (!first) {
+    console.log('[smart] test skipped — no wallets in smart_wallets table');
+    return;
+  }
+  console.log(`[smart] testing Helius connection for ${first.label} (${first.address.slice(0, 8)}…)`);
+  await fetchWalletSwaps(first.address, { verbose: true });
 }
 
 export function getSmartWallets() {
