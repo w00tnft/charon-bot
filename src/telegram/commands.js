@@ -119,6 +119,62 @@ export async function handleMessage(msg) {
     removeSmartWallet(label);
     return bot.sendMessage(chatId, `Removed ${label}.`);
   }
+  if (text.startsWith('/resetstats')) {
+    if (!text.includes('confirm')) {
+      return bot.sendMessage(chatId,
+        '⚠️ <b>WARNING: This will delete all trading history.</b>\n\n' +
+        'Will clear:\n' +
+        '▸ All positions, trades, lessons, decisions\n' +
+        '▸ Signal events, capital snapshots\n' +
+        '▸ Route weights (reset to 1.0×)\n\n' +
+        'Will keep:\n' +
+        '▸ Blacklist, whitelist, smart wallets\n' +
+        '▸ Strategy config, TP/SL rules\n\n' +
+        'Send <code>/resetstats confirm</code> to proceed.',
+        { parse_mode: 'HTML' }
+      );
+    }
+    // Count before deletion for the summary
+    const posBefore = db.prepare("SELECT COUNT(*) AS c FROM dry_run_positions").get().c;
+    const lessonsBefore = db.prepare("SELECT COUNT(*) AS c FROM learning_lessons").get().c;
+    const blCount = db.prepare("SELECT COUNT(*) AS c FROM blacklist").get().c;
+    const swCount = db.prepare("SELECT COUNT(*) AS c FROM smart_wallets WHERE active = 1").get().c;
+
+    db.prepare('DELETE FROM dry_run_positions').run();
+    db.prepare('DELETE FROM dry_run_trades').run();
+    db.prepare('DELETE FROM capital_snapshots').run();
+    db.prepare('DELETE FROM learning_runs').run();
+    db.prepare('DELETE FROM learning_lessons').run();
+    db.prepare('DELETE FROM llm_decisions').run();
+    db.prepare('DELETE FROM llm_batches').run();
+    db.prepare('DELETE FROM decision_logs').run();
+    db.prepare('DELETE FROM signal_events').run();
+    db.prepare('DELETE FROM candidates').run();
+    db.prepare('DELETE FROM trade_intents').run();
+
+    db.prepare(`
+      UPDATE route_weights SET weight = 1.0, win_count = 0, loss_count = 0,
+        avg_pnl_pct = 0, updated_at_ms = ?
+    `).run(Date.now());
+
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('starting_capital_sol', '1.0')").run();
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('last_auto_learn_count', '0')").run();
+
+    return bot.sendMessage(chatId,
+      '✅ <b>STATS RESET COMPLETE</b>\n\n' +
+      '🗑️ Cleared:\n' +
+      `▸ Positions: ${posBefore} deleted\n` +
+      `▸ Lessons: ${lessonsBefore} deleted\n` +
+      '▸ Route weights: reset to 1.0×\n' +
+      '▸ Capital: reset to 1.0 SOL\n\n' +
+      '🔒 Kept:\n' +
+      `▸ Blacklist: ${blCount} entries\n` +
+      `▸ Smart wallets: ${swCount} wallets\n` +
+      '▸ Strategy config: unchanged\n\n' +
+      '🚀 Fresh start! Learning activates at 25 closed positions.',
+      { parse_mode: 'HTML' }
+    );
+  }
   if (text.startsWith('/clearpositions')) {
     const { closeStuckPositions } = await import('../db/positions.js');
     const cleared = closeStuckPositions(0); // 0ms = close ALL open dry_run positions
