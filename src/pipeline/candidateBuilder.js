@@ -8,6 +8,7 @@ import { gmgnLink } from '../format.js';
 import { calculateSafetyScore, checkDeployerHistory } from '../safety.js';
 import { getRouteWeight, toCanonicalRoute } from '../learning/weights.js';
 import { isBlacklisted, isWhitelisted } from '../db/blacklist.js';
+import { fetchBirdeyeScore } from '../feeds/birdeye.js';
 
 export function buildFeeSnapshot(fee, signature) {
   return {
@@ -140,7 +141,7 @@ export function filterCandidate(candidate) {
   return { passed: failures.length === 0, failures, strategy: strat.id };
 }
 
-export async function buildCandidate({ mint, fee = null, signature = null, graduatedCoin = null, trendingToken = null, route }) {
+export async function buildCandidate({ mint, fee = null, signature = null, graduatedCoin = null, trendingToken = null, route, source = null, smartMoneySignal = null, pumpPortalData = null }) {
   const strat = activeStrategy();
   const gmgn = await fetchGmgnTokenInfo(mint);
   const jupiterAsset = await fetchJupiterAsset(mint);
@@ -189,6 +190,7 @@ export async function buildCandidate({ mint, fee = null, signature = null, gradu
     },
     signals: {
       route: signalRoute,
+      source: source || (signalRoute === 'pumpportal' ? 'pumpportal' : 'server'),
       label: signalLabel({
         hasFeeClaim: Boolean(fee),
         hasGraduated: Boolean(graduatedCoin),
@@ -199,6 +201,8 @@ export async function buildCandidate({ mint, fee = null, signature = null, gradu
       hasTrending: Boolean(trendingToken),
       triggerSignature: signature,
       strategy: strat.id,
+      smartMoney: smartMoneySignal || null,
+      pumpPortal: pumpPortalData || null,
     },
     graduation: graduatedCoin,
     trending: trendingToken,
@@ -250,6 +254,23 @@ export async function buildCandidate({ mint, fee = null, signature = null, gradu
     const boostedScore = Math.min(100, candidate.safety.score + 15);
     candidate.safety = { ...candidate.safety, score: boostedScore, passed: boostedScore >= 65 };
     console.log(`[whitelist] $${sym} boosted +15 → score ${boostedScore} — known winner deployer`);
+  }
+
+  // Smart money bonus (+20)
+  if (smartMoneySignal) {
+    const { walletLabel } = smartMoneySignal;
+    const before = candidate.safety.score;
+    const boostedScore = Math.min(100, before + 20);
+    candidate.safety = { ...candidate.safety, score: boostedScore, passed: boostedScore >= 65 };
+    console.log(`[smart] ${walletLabel} signal → score ${before} → ${boostedScore} (+20)`);
+  }
+
+  // Birdeye enrichment bonus (0–30 points, fail-safe)
+  const birdeyeBonus = await fetchBirdeyeScore(mint).catch(() => 0);
+  if (birdeyeBonus > 0) {
+    const before = candidate.safety.score;
+    const boostedScore = Math.min(100, before + birdeyeBonus);
+    candidate.safety = { ...candidate.safety, score: boostedScore, passed: boostedScore >= 65, birdeyeBonus };
   }
 
   const safetyIcon = candidate.safety.passed ? '✅' : '❌';

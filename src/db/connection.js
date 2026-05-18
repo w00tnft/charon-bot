@@ -231,6 +231,16 @@ export function initDb() {
       capital_sol REAL NOT NULL,
       trade_number INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS smart_wallets (
+      label TEXT PRIMARY KEY,
+      address TEXT,
+      win_rate REAL DEFAULT 0,
+      total_trades INTEGER DEFAULT 0,
+      avg_pnl_pct REAL DEFAULT 0,
+      last_seen TEXT,
+      added_at TEXT,
+      active INTEGER DEFAULT 1
+    );
   `);
   ensureColumn('candidates', 'signal_key', 'TEXT');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_candidates_signal_key ON candidates(signal_key) WHERE signal_key IS NOT NULL');
