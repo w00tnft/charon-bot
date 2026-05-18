@@ -6,6 +6,18 @@ export function openPositions() {
   return db.prepare('SELECT * FROM dry_run_positions WHERE status = ? ORDER BY opened_at_ms DESC').all('open');
 }
 
+export function closeStuckPositions(olderThanMs = 30 * 60_000) {
+  const cutoff = now() - olderThanMs;
+  const changes = db.prepare(`
+    UPDATE dry_run_positions
+    SET status = 'closed', closed_at_ms = ?, exit_reason = 'STARTUP_CLEANUP',
+        exit_class = 'neutral', pnl_percent = 0, pnl_sol = 0
+    WHERE status = 'open' AND opened_at_ms < ?
+  `).run(now(), cutoff).changes;
+  if (changes > 0) console.log(`[startup] closed ${changes} stuck dry_run position(s) (open > ${olderThanMs / 60000}min)`);
+  return changes;
+}
+
 export function openPositionCount() {
   return db.prepare('SELECT COUNT(*) AS count FROM dry_run_positions WHERE status = ?').get('open').count;
 }

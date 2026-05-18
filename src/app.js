@@ -4,6 +4,7 @@ import { initDb } from './db/connection.js';
 import { initLiveExecution } from './liveExecutor.js';
 import { setupTelegram } from './telegram/commands.js';
 import { monitorPositions } from './execution/positions.js';
+import { closeStuckPositions } from './db/positions.js';
 import { processCandidateFromSignals, maybeProcessDegenCandidate } from './pipeline/orchestrator.js';
 import { sendTelegram, probeTelegram } from './telegram/send.js';
 import { sendDailyReport } from './telegram/report.js';
@@ -53,6 +54,7 @@ export async function startCharon() {
   }
 
   initDb();
+  closeStuckPositions(30 * 60_000); // clear positions stuck open > 30min before accepting new signals
   initLiveExecution();
   setupTelegram();
   await probeTelegram();
