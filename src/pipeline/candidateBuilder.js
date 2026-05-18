@@ -121,7 +121,8 @@ export function filterCandidate(candidate) {
 
   // Trending filters
   if (candidate.trending) {
-    if (strat.trending_min_volume_usd > 0 && trendingVolume < strat.trending_min_volume_usd) {
+    const birdeyeVol = candidate.safety?.birdeyeBonus > 0; // birdeye confirmed vol>$10k
+    if (strat.trending_min_volume_usd > 0 && !birdeyeVol && trendingVolume < strat.trending_min_volume_usd) {
       failures.push(`trending volume: ${trendingVolume} < ${strat.trending_min_volume_usd}`);
     }
     if (strat.trending_min_swaps > 0 && trendingSwaps > 0 && trendingSwaps < strat.trending_min_swaps) {
