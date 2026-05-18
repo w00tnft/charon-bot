@@ -403,7 +403,7 @@ export function initDb() {
     min_source_count: 2,
     require_fee_claim: false,
     token_age_max_ms: 3600000,
-    min_mcap_usd: 15000,
+    min_mcap_usd: 10000,
     max_mcap_usd: 200000,
     min_fee_claim_sol: 0,
     min_gmgn_total_fee_sol: 0,
@@ -440,7 +440,7 @@ export function initDb() {
   // Apply all current degen settings to existing DBs (INSERT OR IGNORE won't update them).
   const degenMigrations = {
     min_source_count: 2,
-    min_mcap_usd: 15000,
+    min_mcap_usd: 10000,
     max_mcap_usd: 200000,
     trending_min_volume_usd: 500,
     trending_min_swaps: 25,
