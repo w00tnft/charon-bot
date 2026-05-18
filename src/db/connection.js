@@ -478,6 +478,12 @@ export function initDb() {
       ` | hold ${cfg.max_hold_ms / 60000}min` +
       ` | use_llm ${cfg.use_llm}`
     );
+    const tpPct = cfg.take_profit_pct ?? '?';
+    const slPct = cfg.hard_stop_pct ?? '?';
+    const emPct = cfg.emergency_stop_pct ?? '?';
+    const exitType = cfg.exit_type ?? 'legacy';
+    const ok = cfg.emergency_stop_pct != null && cfg.take_profit_pct != null ? '✅' : '⚠️ MISSING FIELDS';
+    console.log(`[config] exit: TP +${tpPct}% ${exitType} | SL -${slPct}% | Emergency -${emPct}% ${ok}`);
   }
 
   // Log agent gate settings so misconfigurations are visible at startup
