@@ -6,30 +6,31 @@ import { db } from '../db/connection.js';
 
 export function fallbackLessons(summary) {
   const lessons = [];
-  const bestRoute = summary.positions.byRoute?.[0];
-  const worstRoute = [...(summary.positions.byRoute || [])].sort((a, b) => a.pnlPercent - b.pnlPercent)[0];
-  if (bestRoute && bestRoute.count >= 2 && bestRoute.pnlPercent > 0) {
+  const byRoute = summary.positions.byRoute || [];
+  const bestRoute = [...byRoute].sort((a, b) => (b.avgPnlPercent ?? 0) - (a.avgPnlPercent ?? 0))[0];
+  const worstRoute = [...byRoute].sort((a, b) => (a.avgPnlPercent ?? 0) - (b.avgPnlPercent ?? 0))[0];
+  if (bestRoute && bestRoute.count >= 2 && (bestRoute.avgPnlPercent ?? 0) > 0) {
     lessons.push({
-      lesson: `Prefer ${bestRoute.route} when other filters are clean; it led the window with ${fmtPct(bestRoute.avgPnlPercent)} avg PnL across ${bestRoute.count} closed dry-runs.`,
+      lesson: `USE ${bestRoute.route} — showed ${fmtPct(bestRoute.avgPnlPercent)} avg PnL across ${bestRoute.count} trades`,
       evidence: bestRoute,
     });
   }
-  if (worstRoute && worstRoute.count >= 2 && worstRoute.pnlPercent < 0) {
+  if (worstRoute && worstRoute.count >= 2 && (worstRoute.avgPnlPercent ?? 0) < 0) {
     lessons.push({
-      lesson: `Be stricter on ${worstRoute.route}; it underperformed with ${fmtPct(worstRoute.avgPnlPercent)} avg PnL across ${worstRoute.count} closed dry-runs.`,
+      lesson: `AVOID ${worstRoute.route} — showed ${fmtPct(worstRoute.avgPnlPercent)} avg PnL across ${worstRoute.count} trades`,
       evidence: worstRoute,
     });
   }
-  const slCount = summary.positions.worst?.filter(row => row.exitReason === 'SL').length || 0;
+  const slCount = summary.positions.worst?.filter(row => row.exitReason === 'SL' || row.exitReason === 'HARD_SL').length || 0;
   if (slCount >= 2) {
     lessons.push({
-      lesson: `Recent worst exits clustered around SL; require stronger fresh pre-entry mcap/liquidity confirmation before accepting late entries.`,
+      lesson: `AVOID late entries — ${slCount} recent worst exits hit stop-loss; require stronger mcap/liquidity confirmation before buy`,
       evidence: { slWorstCount: slCount, worst: summary.positions.worst },
     });
   }
   if (!lessons.length) {
     lessons.push({
-      lesson: 'Not enough closed dry-run evidence yet; keep collecting decisions before changing filters aggressively.',
+      lesson: 'Not enough closed evidence yet; keep collecting positions before changing filters aggressively.',
       evidence: { closed: summary.positions.closed },
     });
   }
@@ -88,10 +89,62 @@ export function storeLearningRun(windowMs, summary, lessons, raw) {
     VALUES (?, ?, ?, ?, ?)
   `).run(now(), windowMs, json(summary), json(lessons), json(raw));
   const runId = Number(result.lastInsertRowid);
+
   const insert = db.prepare(`
     INSERT INTO learning_lessons (run_id, created_at_ms, status, lesson, evidence_json)
     VALUES (?, ?, 'active', ?, ?)
   `);
-  for (const item of lessons) insert.run(runId, now(), item.lesson, json(item.evidence || {}));
+  const upsertExisting = db.prepare(`
+    UPDATE learning_lessons SET run_id = ?, created_at_ms = ?, lesson = ?, evidence_json = ? WHERE id = ?
+  `);
+
+  for (const item of lessons) {
+    const route = item.evidence?.route ?? null;
+    let replaced = false;
+    if (route) {
+      const isNegative = item.lesson.toUpperCase().startsWith('AVOID') || item.lesson.toLowerCase().startsWith('be stricter');
+      const existing = db.prepare(`
+        SELECT id FROM learning_lessons
+        WHERE status = 'active'
+          AND json_extract(evidence_json, '$.route') = ?
+          AND (
+            (? AND (lesson LIKE 'AVOID%' OR lesson LIKE 'Be stricter%'))
+            OR (NOT ? AND lesson NOT LIKE 'AVOID%' AND lesson NOT LIKE 'Be stricter%')
+          )
+        ORDER BY created_at_ms DESC LIMIT 1
+      `).get(route, isNegative ? 1 : 0, isNegative ? 1 : 0);
+      if (existing) {
+        upsertExisting.run(runId, now(), item.lesson, json(item.evidence || {}), existing.id);
+        replaced = true;
+      }
+    }
+    if (!replaced) insert.run(runId, now(), item.lesson, json(item.evidence || {}));
+  }
   return runId;
+}
+
+export function deduplicateLessons() {
+  const lessons = db.prepare(`
+    SELECT id, lesson, json_extract(evidence_json, '$.route') AS route
+    FROM learning_lessons WHERE status = 'active' AND json_extract(evidence_json, '$.route') IS NOT NULL
+    ORDER BY created_at_ms DESC
+  `).all();
+
+  const seen = new Set();
+  const toArchive = [];
+  for (const { id, lesson, route } of lessons) {
+    const isNeg = lesson.toUpperCase().startsWith('AVOID') || lesson.toLowerCase().startsWith('be stricter');
+    const key = `${route}:${isNeg ? 'neg' : 'pos'}`;
+    if (seen.has(key)) {
+      toArchive.push(id);
+    } else {
+      seen.add(key);
+    }
+  }
+
+  if (toArchive.length > 0) {
+    db.prepare(`UPDATE learning_lessons SET status = 'archived' WHERE id IN (${toArchive.map(() => '?').join(',')})`)
+      .run(...toArchive);
+    console.log(`[learn] dedup: archived ${toArchive.length} duplicate lesson(s), ${seen.size} active remain`);
+  }
 }

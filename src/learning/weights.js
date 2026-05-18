@@ -1,14 +1,27 @@
 import { db } from '../db/connection.js';
 import { now } from '../utils.js';
 
+const LESSON_OVERRIDES = {
+  fee_graduated_trending: 0.3,   // avoid — -3.8% avg PnL
+  fee_trending:           1.5,   // strong signal — +6% avg PnL
+  fee_graduated:          1.1,   // reliable dual-source
+  graduated_trending:     1.0,   // neutral
+  fee_claim:              1.0,
+  graduated:              1.0,
+  trending:               1.0,
+  single_source:          1.0,
+};
+
 export function toCanonicalRoute(route) {
   if (!route) return 'single_source';
   const r = String(route).toLowerCase();
   const hasFee = r.includes('fee');
   const hasGraduated = r.includes('graduated');
   const hasTrending = r.includes('trending');
-  const sourceCount = [hasFee, hasGraduated, hasTrending].filter(Boolean).length;
-  if (sourceCount >= 2) return 'multi_source';
+  if (hasFee && hasGraduated && hasTrending) return 'fee_graduated_trending';
+  if (hasFee && hasTrending) return 'fee_trending';
+  if (hasFee && hasGraduated) return 'fee_graduated';
+  if (hasGraduated && hasTrending) return 'graduated_trending';
   if (hasFee) return 'fee_claim';
   if (hasGraduated) return 'graduated';
   if (hasTrending) return 'trending';
@@ -62,10 +75,11 @@ export function recalculateWeights() {
   for (const [route, row] of byRoute.entries()) {
     if (row.count === 0) continue;
 
-    // Insufficient data — keep neutral 1.0x to avoid skewing scores
+    // Insufficient data — use lesson override weight to avoid ignoring known signal quality
     if (row.count < 10) {
-      upsert.run(route, row.wins, row.losses, row.pnlSum / row.count, 1.0, now());
-      results.push({ route, weight: 1.0, winRate: 0, avgPnl: row.pnlSum / row.count, count: row.count, wins: row.wins, neutrals: row.neutrals, losses: row.losses, insufficient: true });
+      const overrideWeight = LESSON_OVERRIDES[route] ?? 1.0;
+      upsert.run(route, row.wins, row.losses, row.pnlSum / row.count, overrideWeight, now());
+      results.push({ route, weight: overrideWeight, winRate: 0, avgPnl: row.pnlSum / row.count, count: row.count, wins: row.wins, neutrals: row.neutrals, losses: row.losses, insufficient: true });
       continue;
     }
 
@@ -84,7 +98,7 @@ export function recalculateWeights() {
   if (results.length > 0) {
     console.log('[weights] ' + results.map(r =>
       r.insufficient
-        ? `${r.route}: 1.00x (insufficient data — ${r.count}/10 trades)`
+        ? `${r.route}: ${r.weight.toFixed(2)}x (insufficient data — ${r.count}/10 trades)`
         : `${r.route}: ${r.weight.toFixed(2)}x`
     ).join(' | '));
   }
@@ -94,9 +108,23 @@ export function recalculateWeights() {
 export function getRouteWeight(route) {
   const canonical = toCanonicalRoute(route);
   const row = db.prepare('SELECT weight FROM route_weights WHERE route = ?').get(canonical);
-  return row ? Number(row.weight) : 1.0;
+  if (row) return Number(row.weight);
+  return LESSON_OVERRIDES[canonical] ?? 1.0;
 }
 
 export function allRouteWeights() {
   return db.prepare('SELECT * FROM route_weights ORDER BY weight DESC').all();
+}
+
+export function seedRouteWeightOverrides() {
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO route_weights (route, win_count, loss_count, avg_pnl_pct, weight, updated_at_ms)
+    VALUES (?, 0, 0, 0, ?, ?)
+  `);
+  const ts = Date.now();
+  for (const [route, weight] of Object.entries(LESSON_OVERRIDES)) {
+    insert.run(route, weight, ts);
+  }
+  console.log('[weights] lesson overrides seeded: ' +
+    Object.entries(LESSON_OVERRIDES).map(([r, w]) => `${r}: ${w}x`).join(' | '));
 }

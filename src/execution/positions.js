@@ -159,8 +159,8 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
     const emergencyPct = Math.abs(strat.emergency_stop_pct ?? 40);
     const maxHoldMs = strat.max_hold_ms ?? 0;
 
-    db.prepare('UPDATE dry_run_positions SET high_water_mcap = ?, high_water_price = ? WHERE id = ?')
-      .run(highWaterMcap, highWaterPrice, position.id);
+    db.prepare('UPDATE dry_run_positions SET high_water_mcap = ?, high_water_price = ?, pnl_percent = ? WHERE id = ?')
+      .run(highWaterMcap, highWaterPrice, pnlPercent, position.id);
 
     if (!exitReason && maxHoldMs > 0 && (now() - position.opened_at_ms) >= maxHoldMs) {
       exitReason = 'MAX_HOLD';
@@ -470,8 +470,27 @@ export async function monitorPositions() {
     // Force-close at max_hold_ms (strategy time limit) even without price data,
     // or fall back to 2-hour hard timeout.
     if (!result && position.execution_mode !== 'live') {
-      const ageMs = now() - position.opened_at_ms;
       const strat = strategyById(position.strategy_id);
+
+      // Emergency stop using last stored PnL when price is unavailable
+      if (strat?.exit_type === 'full') {
+        const emergencyPct = Math.abs(strat.emergency_stop_pct ?? 40);
+        const lastPnl = Number(position.pnl_percent || 0);
+        if (lastPnl <= -emergencyPct) {
+          db.prepare(`
+            UPDATE dry_run_positions
+            SET status = 'closed', closed_at_ms = ?, exit_reason = 'EMERGENCY_STOP',
+                pnl_percent = ?, pnl_sol = ?, exit_class = 'loss'
+            WHERE id = ?
+          `).run(now(), lastPnl, Number(position.size_sol) * lastPnl / 100, position.id);
+          console.log(`[position] EMERGENCY FORCE CLOSE $${position.symbol} — price unknown, assumed > -${emergencyPct}% loss ❌`);
+          await sendPositionExit({ ...position, exitReason: 'EMERGENCY_STOP', pnlPercent: lastPnl, pnl_percent: lastPnl, exit_class: 'loss' }).catch(() => {});
+          anyExit = true;
+          continue;
+        }
+      }
+
+      const ageMs = now() - position.opened_at_ms;
       const maxHoldMs = strat?.max_hold_ms > 0 ? strat.max_hold_ms : DRY_RUN_TIMEOUT_MS;
       const timeoutMs = Math.min(maxHoldMs + 5 * 60_000, DRY_RUN_TIMEOUT_MS); // max_hold + 5min grace, floor at 2h
       if (ageMs >= timeoutMs) {

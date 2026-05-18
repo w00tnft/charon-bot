@@ -11,6 +11,8 @@ import { sendDailyReport } from './telegram/report.js';
 import { numSetting } from './db/settings.js';
 import { runCleanup, isDueForCleanup } from './db/cleanup.js';
 import { makeFailureTracker } from './utils.js';
+import { seedRouteWeightOverrides } from './learning/weights.js';
+import { deduplicateLessons } from './learning/lessons.js';
 
 setDefaultResultOrder('ipv4first');
 validateConfig();
@@ -55,6 +57,8 @@ export async function startCharon() {
 
   initDb();
   closeStuckPositions(30 * 60_000); // clear positions stuck open > 30min before accepting new signals
+  seedRouteWeightOverrides();
+  deduplicateLessons();
   initLiveExecution();
   setupTelegram();
   await probeTelegram();
