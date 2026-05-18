@@ -38,15 +38,21 @@ async function handleMessage(msg) {
     if (!mint) return;
     const symbol = msg.symbol || '';
     const name = msg.name || '';
-    const marketCapSol = Number(msg.marketCapSol || 0);
-    const initialBuy = Number(msg.initialBuy || 0);
+
+    // marketCapSol is already in SOL (not lamports) — display directly
+    const marketCapSol = Number(msg.marketCapSol || msg.vSolInBondingCurve || 0);
+
+    // initialBuy is in lamports — convert to SOL
+    const initialBuyLamports = Number(msg.initialBuy || msg.solAmount || 0);
+    const initialBuySol = initialBuyLamports / 1_000_000_000;
+
     const devWallet = msg.traderPublicKey || '';
     // PumpPortal sends Unix seconds; fall back to now
     const timestamp = msg.timestamp ? Number(msg.timestamp) * 1000 : now();
-    const mcapK = (marketCapSol / 1000).toFixed(1);
-    console.log(`[pump] new token: $${symbol} mcap: ${mcapK}k dev: ${initialBuy.toFixed(3)} SOL`);
 
-    if (initialBuy < 0.5) return;           // dev not committed
+    console.log(`[pump] new token: $${symbol} mcap: ${marketCapSol.toFixed(1)} SOL dev: ${initialBuySol.toFixed(3)} SOL`);
+
+    if (initialBuySol < 0.5) return;        // dev not committed enough
     if (now() - timestamp > 30_000) return; // stale event
 
     if (candidateHandler) {
@@ -61,7 +67,7 @@ async function handleMessage(msg) {
           market_cap: marketCapSol,
           seenAt: now(),
         },
-        pumpPortalData: { devWallet, initialBuy, marketCapSol, timestamp },
+        pumpPortalData: { devWallet, initialBuySol, marketCapSol, timestamp },
       });
     }
     return;

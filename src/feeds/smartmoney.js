@@ -1,7 +1,7 @@
-import axios from 'axios';
 import { db } from '../db/connection.js';
 import { now } from '../utils.js';
 import { GMGN_API_KEY } from '../config.js';
+import { gmgnFetch } from '../enrichment/gmgn.js';
 
 let candidateHandler = null;
 export function setCandidateHandler(fn) { candidateHandler = fn; }
@@ -28,19 +28,18 @@ export async function pollSmartWallets() {
 
   for (const { address, label } of wallets) {
     try {
-      const r = await axios.get(`https://gmgn.ai/api/v1/wallet/${address}/activity`, {
-        timeout: 8_000,
-        headers: { 'x-api-key': GMGN_API_KEY },
+      // Use the same openapi.gmgn.ai base + X-APIKEY auth as the rest of the codebase
+      const res = await gmgnFetch(`/defi/quotation/v1/wallet_activity/sol`, {
+        params: { wallet: address, limit: 10, type: 'buy' },
       });
-      const activities = r.data?.data?.activities || r.data?.activities || [];
+      const activities = res?.data?.activities || res?.activities || [];
       const cutoff = now() - 60_000;
 
       for (const act of activities) {
-        if (act.event_type !== 'buy' && act.activity_type !== 'buy') continue;
-        const actTs = Number(act.timestamp || act.block_time || 0) * 1000;
+        const actTs = Number(act.timestamp || act.block_time || act.time || 0) * 1000;
         if (actTs < cutoff) continue;
 
-        const mint = act.token?.address || act.token_address || act.mint;
+        const mint = act.token?.address || act.token_address || act.address || act.mint;
         if (!mint) continue;
 
         const key = `${address}:${mint}`;
@@ -48,7 +47,7 @@ export async function pollSmartWallets() {
         seenSmartSignals.set(key, now());
 
         const symbol = act.token?.symbol || act.symbol || '';
-        const buyAmount = Number(act.cost_sol || act.amount_sol || act.sol_amount || 0);
+        const buyAmount = Number(act.cost_sol || act.amount_sol || act.sol_amount || act.total_sol || 0);
 
         console.log(`[smart] ${label} bought $${symbol} — ${buyAmount.toFixed(3)} SOL`);
 
@@ -72,8 +71,9 @@ export async function pollSmartWallets() {
         }
       }
     } catch (err) {
-      if (err.response?.status !== 404) {
-        console.log(`[smart] ${label} (${address.slice(0, 8)}…): ${err.message}`);
+      const status = err.response?.status;
+      if (status !== 404) {
+        console.log(`[smart] ${label} (${address.slice(0, 8)}…): ${status || ''} ${err.message}`);
       }
     }
   }
