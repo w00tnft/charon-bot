@@ -30,6 +30,7 @@ import { consumeNumericFilterInput } from './input.js';
 import { getBlacklist } from '../db/blacklist.js';
 import { sendDailyReport } from './report.js';
 import { runLearning, sendLessons } from '../learning/commands.js';
+import { addSmartWallet, removeSmartWallet, getSmartWallets, smartWalletStats } from '../feeds/smartmoney.js';
 
 export async function handleMessage(msg) {
   const text = (msg.text || '').trim();
@@ -108,14 +109,18 @@ export async function handleMessage(msg) {
       INSERT INTO saved_wallets (label, address, created_at_ms) VALUES (?, ?, ?)
       ON CONFLICT(label) DO UPDATE SET address = excluded.address
     `).run(label, address, now());
-    return bot.sendMessage(chatId, `Saved wallet ${label}.`);
+    addSmartWallet(label, address);
+    return bot.sendMessage(chatId, `✅ Added ${label} to smart money tracking`);
   }
   if (text.startsWith('/walletremove')) {
     const label = text.split(/\s+/)[1];
     if (!label) return bot.sendMessage(chatId, 'Usage: /walletremove <label>');
     db.prepare('DELETE FROM saved_wallets WHERE label = ?').run(label);
+    removeSmartWallet(label);
     return bot.sendMessage(chatId, `Removed ${label}.`);
   }
+  if (text.startsWith('/walletlist')) return sendSmartWalletList(chatId);
+  if (text.startsWith('/walletstats')) return sendSmartWalletStats(chatId);
   if (text.startsWith('/wallets')) return handleCallback({ id: 'manual', data: 'menu:wallets', message: { chat: { id: chatId } } });
   if (text.startsWith('/setfilter')) {
     const { key, value } = parseSetFilter(text);
@@ -249,6 +254,36 @@ export async function toggleTrailing(chatId, id, query = null) {
   await sendPosition(chatId, id, query);
 }
 
+export async function sendSmartWalletList(chatId) {
+  const wallets = getSmartWallets();
+  const lines = ['👛 <b>SMART MONEY WALLETS</b>', ''];
+  if (wallets.length === 0) {
+    lines.push('No wallets yet. Use /walletadd &lt;label&gt; &lt;address&gt;');
+  } else {
+    for (const w of wallets) {
+      const status = w.active ? '✅' : '⏸';
+      const addr = w.address ? `<code>${w.address.slice(0, 8)}…</code>` : '<i>no address</i>';
+      lines.push(`▸ ${escapeHtml(w.label)}: ${addr} ${status}`);
+    }
+  }
+  return bot.sendMessage(chatId, lines.join('\n'), { parse_mode: 'HTML' });
+}
+
+export async function sendSmartWalletStats(chatId) {
+  const stats = smartWalletStats();
+  const lines = ['📊 <b>SMART MONEY PERFORMANCE</b>', ''];
+  if (stats.length === 0) {
+    lines.push('No wallets tracked yet.');
+  } else {
+    for (const w of stats) {
+      const decisive = w.wins + w.losses;
+      const wr = decisive > 0 ? Math.round((w.wins / decisive) * 100) : 0;
+      lines.push(`▸ ${escapeHtml(w.label)}: ${w.signals} signals, ${wr}% win (${w.wins}W/${w.losses}L)`);
+    }
+  }
+  return bot.sendMessage(chatId, lines.join('\n'), { parse_mode: 'HTML' });
+}
+
 export function setupTelegram() {
   bot.setMyCommands([
     { command: 'menu', description: 'Open Charon menu' },
@@ -264,9 +299,11 @@ export function setupTelegram() {
     { command: 'learn', description: 'Run manual learning report' },
     { command: 'lessons', description: 'Show active screening lessons' },
     { command: 'setfilter', description: 'Set a filter value' },
-    { command: 'walletadd', description: 'Save wallet for exposure/PnL' },
-    { command: 'walletremove', description: 'Remove saved wallet' },
-    { command: 'wallets', description: 'List saved wallets' },
+    { command: 'walletadd', description: 'Add smart money wallet to track' },
+    { command: 'walletlist', description: 'List smart money wallets' },
+    { command: 'walletstats', description: 'Smart money wallet performance stats' },
+    { command: 'walletremove', description: 'Remove wallet from tracking' },
+    { command: 'wallets', description: 'List saved wallets (exposure view)' },
   ]).catch(err => console.log(`[telegram] commands ${err.message}`));
 
   bot.on('callback_query', query => handleCallback(query).catch(err => console.log(`[callback] ${err.message}`)));

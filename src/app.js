@@ -1,5 +1,5 @@
 import { setDefaultResultOrder } from 'node:dns';
-import { APP_NAME, SIGNAL_SERVER_URL, SIGNAL_POLL_MS, GRADUATED_POLL_MS, TRENDING_POLL_MS, POSITION_CHECK_MS, REPORT_INTERVAL_MS, validateConfig } from './config.js';
+import { APP_NAME, SIGNAL_SERVER_URL, SIGNAL_POLL_MS, GRADUATED_POLL_MS, TRENDING_POLL_MS, POSITION_CHECK_MS, REPORT_INTERVAL_MS, PUMPPORTAL_ENABLED, SMART_MONEY_POLL_MS, validateConfig } from './config.js';
 import { initDb } from './db/connection.js';
 import { initLiveExecution } from './liveExecutor.js';
 import { setupTelegram } from './telegram/commands.js';
@@ -83,6 +83,19 @@ export async function startCharon() {
 
     console.log(`[bot] ${APP_NAME} started (standalone mode)`);
   }
+
+  // PumpPortal real-time feed (both modes, optional)
+  if (PUMPPORTAL_ENABLED) {
+    const { startPumpPortal, setCandidateHandler: setPumpHandler } = await import('./feeds/pumpportal.js');
+    setPumpHandler(processCandidateFromSignals);
+    startPumpPortal();
+    console.log('[bot] PumpPortal feed enabled');
+  }
+
+  // Smart money wallet polling (both modes, requires GMGN_API_KEY)
+  const { pollSmartWallets, setCandidateHandler: setSmartHandler } = await import('./feeds/smartmoney.js');
+  setSmartHandler(processCandidateFromSignals);
+  addInterval(() => pollSmartWallets().catch(err => console.log(`[smart] ${err.message}`)), SMART_MONEY_POLL_MS);
 
   // Position monitoring runs in both modes
   const trackPositions = makeFailureTracker('position monitor', (msg) => sendTelegram(msg));
