@@ -17,12 +17,18 @@ function pruneSeenSmartSignals() {
 }
 
 export async function pollSmartWallets() {
-  if (!GMGN_API_KEY) return;
+  if (!GMGN_API_KEY) {
+    console.log('[smart] poll skipped — GMGN_API_KEY not set');
+    return;
+  }
 
   const wallets = db.prepare(
     "SELECT address, label FROM smart_wallets WHERE active = 1 AND address IS NOT NULL AND address != ''"
   ).all();
-  if (wallets.length === 0) return;
+  if (wallets.length === 0) {
+    console.log('[smart] poll skipped — no active wallets in smart_wallets table');
+    return;
+  }
 
   pruneSeenSmartSignals();
 

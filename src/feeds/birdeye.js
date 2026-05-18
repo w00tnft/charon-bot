@@ -42,11 +42,16 @@ export async function fetchBirdeyeScore(mint) {
 
   if (!overview && !security) return 0;
 
+  // Log raw security field names so we can identify the correct holder % field
+  if (security) {
+    const rawKeys = Object.keys(security);
+    console.log('[birdeye] security keys:', rawKeys.join(', '));
+    console.log('[birdeye] security sample:', JSON.stringify(security).slice(0, 200));
+  }
+
   const holders = Number(overview?.holder ?? 0);
-  const uniqueWallets24h = Number(overview?.uniqueWallet24h ?? 0);
   const priceChange1h = Number(overview?.priceChange1hPercent ?? 0);
   const volume1h = Number(overview?.v1hUSD ?? 0);
-  const liquidity = Number(overview?.liquidity ?? 0);
 
   // API returns fractions (0–1); multiply by 100 to get percent. Default 1 (=100%) = conservative.
   const top10Raw = Number(security?.top10HolderPercent ?? security?.top10UserPercent ?? 1);
