@@ -97,6 +97,7 @@ export async function startCharon() {
   setSmartHandler(processCandidateFromSignals);
   const smartWalletCount = getSmartWallets().filter(w => w.active && w.address).length;
   console.log(`[smart] starting — polling ${smartWalletCount} wallet(s) every ${SMART_MONEY_POLL_MS / 1000}s`);
+  pollSmartWallets().catch(err => console.log(`[smart] initial poll error: ${err.message}`));
   addInterval(() => pollSmartWallets().catch(err => console.log(`[smart] ${err.message}`)), SMART_MONEY_POLL_MS);
 
   // Position monitoring runs in both modes
