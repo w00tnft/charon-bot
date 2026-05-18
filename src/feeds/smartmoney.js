@@ -1,7 +1,7 @@
+import axios from 'axios';
 import { db } from '../db/connection.js';
 import { now } from '../utils.js';
-import { GMGN_API_KEY } from '../config.js';
-import { gmgnFetch } from '../enrichment/gmgn.js';
+import { HELIUS_API_KEY } from '../config.js';
 
 let candidateHandler = null;
 export function setCandidateHandler(fn) { candidateHandler = fn; }
@@ -16,10 +16,67 @@ function pruneSeenSmartSignals() {
   }
 }
 
+async function fetchWalletSwaps(address) {
+  // Primary: Helius enhanced transactions API (no Cloudflare blocking)
+  if (HELIUS_API_KEY) {
+    try {
+      const r = await axios.get(`https://api.helius.xyz/v0/addresses/${address}/transactions`, {
+        params: { 'api-key': HELIUS_API_KEY, limit: 10, type: 'SWAP' },
+        timeout: 5_000,
+      });
+      return { source: 'helius', txs: r.data || [] };
+    } catch (err) {
+      console.log(`[smart] helius ${address.slice(0, 8)}: ${err.response?.status || ''} ${err.message}`);
+    }
+  }
+
+  // Fallback: Solscan public API
+  try {
+    const r = await axios.get('https://public-api.solscan.io/account/transactions', {
+      params: { account: address, limit: 10 },
+      headers: { Accept: 'application/json' },
+      timeout: 5_000,
+    });
+    return { source: 'solscan', txs: r.data || [] };
+  } catch (err) {
+    console.log(`[smart] solscan ${address.slice(0, 8)}: ${err.response?.status || ''} ${err.message}`);
+  }
+
+  return { source: null, txs: [] };
+}
+
+function parseHeliusSwaps(txs, walletAddress, cutoff) {
+  const results = [];
+  for (const tx of txs) {
+    const ts = Number(tx.timestamp || 0) * 1000;
+    if (ts < cutoff) continue;
+    if (tx.type !== 'SWAP') continue;
+
+    // Token received by wallet in this swap
+    const received = (tx.tokenTransfers || []).find(
+      t => t.toUserAccount === walletAddress && t.mint
+    );
+    if (!received) continue;
+
+    // SOL spent from wallet (lamports → SOL)
+    const solSpentLam = (tx.nativeTransfers || [])
+      .filter(t => t.fromUserAccount === walletAddress)
+      .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+
+    results.push({
+      mint: received.mint,
+      symbol: received.tokenSymbol || '',
+      buyAmount: solSpentLam / 1e9,
+    });
+  }
+  return results;
+}
+
 export async function pollSmartWallets() {
   console.log('[smart] poll tick');
-  if (!GMGN_API_KEY) {
-    console.log('[smart] poll skipped — GMGN_API_KEY not set');
+
+  if (!HELIUS_API_KEY) {
+    console.log('[smart] poll skipped — HELIUS_API_KEY not set');
     return;
   }
 
@@ -33,41 +90,20 @@ export async function pollSmartWallets() {
 
   pruneSeenSmartSignals();
 
-  let firstWallet = true;
   for (const { address, label } of wallets) {
     try {
-      const res = await gmgnFetch(`/defi/quotation/v1/wallet_activity/sol`, {
-        params: { wallet: address, limit: 10, type: 'buy' },
-      });
-
-      // Log raw response for first wallet each poll cycle to aid debugging
-      if (firstWallet) {
-        firstWallet = false;
-        const keys = res ? Object.keys(res) : [];
-        const actCount = (res?.data?.activities || res?.activities || []).length;
-        console.log(`[smart] debug ${label}: keys=${keys.join(',') || 'none'} activities=${actCount}`);
-      }
-
-      const activities = res?.data?.activities || res?.activities || [];
       const cutoff = now() - 60_000;
+      const { source, txs } = await fetchWalletSwaps(address);
+      const swaps = source === 'helius' ? parseHeliusSwaps(txs, address, cutoff) : [];
+      console.log(`[smart] ${label}: ${swaps.length} recent swap(s) via ${source || 'none'}`);
 
-      for (const act of activities) {
-        const actTs = Number(act.timestamp || act.block_time || act.time || 0) * 1000;
-        if (actTs < cutoff) continue;
-
-        const mint = act.token?.address || act.token_address || act.address || act.mint;
-        if (!mint) continue;
-
+      for (const { mint, symbol, buyAmount } of swaps) {
         const key = `${address}:${mint}`;
         if (seenSmartSignals.has(key)) continue;
         seenSmartSignals.set(key, now());
 
-        const symbol = act.token?.symbol || act.symbol || '';
-        const buyAmount = Number(act.cost_sol || act.amount_sol || act.sol_amount || act.total_sol || 0);
+        console.log(`[smart] ${label} bought $${symbol || mint.slice(0, 8)} — ${buyAmount.toFixed(3)} SOL`);
 
-        console.log(`[smart] ${label} bought $${symbol} — ${buyAmount.toFixed(3)} SOL`);
-
-        // Increment signal count
         db.prepare(
           'UPDATE smart_wallets SET total_trades = total_trades + 1, last_seen = ? WHERE address = ?'
         ).run(new Date().toISOString(), address);
@@ -77,20 +113,13 @@ export async function pollSmartWallets() {
             mint,
             route: 'smart_money',
             source: 'smart_money',
-            trendingToken: {
-              address: mint,
-              symbol,
-              seenAt: now(),
-            },
+            trendingToken: { address: mint, symbol, seenAt: now() },
             smartMoneySignal: { walletLabel: label, walletAddress: address, buyAmount },
           }).catch(err => console.log(`[smart] pipeline error: ${err.message}`));
         }
       }
     } catch (err) {
-      const status = err.response?.status;
-      if (status !== 404) {
-        console.log(`[smart] ${label} (${address.slice(0, 8)}…): ${status || ''} ${err.message}`);
-      }
+      console.log(`[smart] ${label} (${address.slice(0, 8)}…): ${err.message}`);
     }
   }
 }
@@ -112,7 +141,6 @@ export function removeSmartWallet(label) {
 }
 
 export function smartWalletStats() {
-  // Query positions whose snapshot_json contains a smart_money source per wallet label
   const wallets = db.prepare('SELECT * FROM smart_wallets ORDER BY label').all();
   const results = [];
   for (const w of wallets) {

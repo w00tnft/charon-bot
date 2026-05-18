@@ -417,7 +417,7 @@ export function initDb() {
     trending_max_rug_ratio: 0.25,
     trending_max_bundler_rate: 0.25,
     position_size_sol: 0.05,
-    max_open_positions: 3,
+    max_open_positions: 10,
     partial_exit_pct: 30,
     partial_exit_size: 0.60,
     trailing_stop_pct: 20,
@@ -446,7 +446,7 @@ export function initDb() {
     trending_min_swaps: 25,
     trending_max_rug_ratio: 0.25,
     trending_max_bundler_rate: 0.25,
-    max_open_positions: 3,
+    max_open_positions: 10,
     partial_exit_pct: 30,
     partial_exit_size: 0.60,
     trailing_stop_pct: 20,
@@ -468,8 +468,8 @@ export function initDb() {
       ` | vol $${cfg.trending_min_volume_usd}` +
       ` | swaps ${cfg.trending_min_swaps}` +
       ` | safety ${cfg.min_safety_score}` +
-      ` | rug ${cfg.trending_max_rug_ratio}` +
-      ` | bundler ${cfg.trending_max_bundler_rate}`
+      ` | max_positions ${cfg.max_open_positions}` +
+      ` | hold ${cfg.max_hold_ms / 60000}min`
     );
   }
 }
