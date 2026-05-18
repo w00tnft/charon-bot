@@ -416,19 +416,24 @@ export async function monitorPositions() {
         console.log(`[blacklist] reputation update error: ${err.message}`));
     }
 
-    // Dry-run positions that can't be priced (dead token, no liquidity) are closed
-    // after 2 hours so they don't permanently block the max_open_positions gate.
+    // Dry-run positions that can't be priced (dead token, no liquidity):
+    // Force-close at max_hold_ms (strategy time limit) even without price data,
+    // or fall back to 2-hour hard timeout.
     if (!result && position.execution_mode !== 'live') {
       const ageMs = now() - position.opened_at_ms;
-      if (ageMs >= DRY_RUN_TIMEOUT_MS) {
+      const strat = strategyById(position.strategy_id);
+      const maxHoldMs = strat?.max_hold_ms > 0 ? strat.max_hold_ms : DRY_RUN_TIMEOUT_MS;
+      const timeoutMs = Math.min(maxHoldMs + 5 * 60_000, DRY_RUN_TIMEOUT_MS); // max_hold + 5min grace, floor at 2h
+      if (ageMs >= timeoutMs) {
+        const reason = ageMs >= DRY_RUN_TIMEOUT_MS ? 'DRY_RUN_TIMEOUT' : 'MAX_HOLD_NO_PRICE';
         db.prepare(`
           UPDATE dry_run_positions
-          SET status = 'closed', closed_at_ms = ?, exit_reason = 'DRY_RUN_TIMEOUT', pnl_percent = 0, pnl_sol = 0,
+          SET status = 'closed', closed_at_ms = ?, exit_reason = ?, pnl_percent = 0, pnl_sol = 0,
               exit_class = 'loss'
           WHERE id = ?
-        `).run(now(), position.id);
-        console.log(`[position] ${position.id} (${position.symbol || position.mint.slice(0, 8)}) auto-closed after ${Math.round(ageMs / 60000)}m — no price data`);
-        await sendPositionExit({ ...position, exitReason: 'DRY_RUN_TIMEOUT', pnlPercent: 0, pnl_percent: 0, pnlSol: 0, pnl_sol: 0 }).catch(() => {});
+        `).run(now(), reason, position.id);
+        console.log(`[position] ${position.id} (${position.symbol || position.mint.slice(0, 8)}) force-closed after ${Math.round(ageMs / 60000)}m — ${reason}`);
+        await sendPositionExit({ ...position, exitReason: reason, pnlPercent: 0, pnl_percent: 0, pnlSol: 0, pnl_sol: 0 }).catch(() => {});
         anyExit = true;
       }
     }

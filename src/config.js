@@ -42,7 +42,7 @@ export const LPAGENT_API_KEY = process.env.LPAGENT_API_KEY || '';
 export const LPAGENT_BASE_URL = 'https://api.lpagent.io/open-api/v1';
 export const REPORT_INTERVAL_MS = Number(process.env.REPORT_INTERVAL_MS || 24 * 60 * 60 * 1000);
 export const PUMPPORTAL_ENABLED = process.env.PUMPPORTAL_ENABLED !== 'false';
-export const SMART_MONEY_POLL_MS = Number(process.env.SMART_MONEY_POLL_MS || 60_000);
+export const SMART_MONEY_POLL_MS = Number(process.env.SMART_MONEY_POLL_MS || 90_000); // 90s default to avoid Helius rate limits
 export const BIRDEYE_API_KEY = process.env.BIRDEYE_API_KEY || '';
 
 export const JSON_HEADERS = {
