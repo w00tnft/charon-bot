@@ -265,16 +265,18 @@ export async function buildCandidate({ mint, fee = null, signature = null, gradu
     console.log(`[smart] ${walletLabel} signal → score ${before} → ${boostedScore} (+20)`);
   }
 
-  // Birdeye enrichment bonus (0–30 points, fail-safe)
-  const birdeyeBonus = await fetchBirdeyeScore(mint).catch(() => 0);
+  // Birdeye enrichment bonus (0–30 points, fail-safe — can only increase score)
+  const birdeyeBonus = Math.max(0, await fetchBirdeyeScore(mint).catch(() => 0));
   if (birdeyeBonus > 0) {
     const before = candidate.safety.score;
     const boostedScore = Math.min(100, before + birdeyeBonus);
     candidate.safety = { ...candidate.safety, score: boostedScore, passed: boostedScore >= 65, birdeyeBonus };
+    console.log(`[birdeye] +${birdeyeBonus} → score ${before} → ${boostedScore}`);
   }
 
   const safetyIcon = candidate.safety.passed ? '✅' : '❌';
   const topFlags = candidate.safety.flags.slice(0, 3).join(', ');
+  // Note: score reduction is only from route weight (e.g. 0.75x = score×0.75). Birdeye/smart-money only add.
   console.log(`[safety] ${candidate.token.symbol || mint.slice(0, 8)} score: ${candidate.safety.score}/100 ${safetyIcon}${topFlags ? ` — ${topFlags}` : ''}`);
 
   candidate.filters = filterCandidate(candidate);
