@@ -17,6 +17,7 @@ function pruneSeenSmartSignals() {
 }
 
 export async function pollSmartWallets() {
+  console.log('[smart] poll tick');
   if (!GMGN_API_KEY) {
     console.log('[smart] poll skipped — GMGN_API_KEY not set');
     return;

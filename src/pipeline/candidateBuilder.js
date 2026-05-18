@@ -124,7 +124,7 @@ export function filterCandidate(candidate) {
     if (strat.trending_min_volume_usd > 0 && trendingVolume < strat.trending_min_volume_usd) {
       failures.push(`trending volume: ${trendingVolume} < ${strat.trending_min_volume_usd}`);
     }
-    if (strat.trending_min_swaps > 0 && trendingSwaps < strat.trending_min_swaps) {
+    if (strat.trending_min_swaps > 0 && trendingSwaps > 0 && trendingSwaps < strat.trending_min_swaps) {
       failures.push(`trending swaps: ${trendingSwaps} < ${strat.trending_min_swaps}`);
     }
     if (strat.trending_max_rug_ratio > 0 && Number.isFinite(rugRatio) && rugRatio > strat.trending_max_rug_ratio) {

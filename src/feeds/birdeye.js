@@ -29,6 +29,7 @@ export async function fetchBirdeyeScore(mint) {
     // timeout or API error — skip silently
   }
 
+  console.log(`[birdeye] fetching security for: ${mint.slice(0, 8)}`);
   try {
     const r = await axios.get(`${BASE}/defi/token_security`, {
       params: { address: mint },
@@ -36,9 +37,10 @@ export async function fetchBirdeyeScore(mint) {
       timeout: TIMEOUT_MS,
     });
     security = r.data?.data || null;
-  } catch {
-    // timeout or API error — skip silently
+  } catch (err) {
+    console.log(`[birdeye] security fetch error: ${err.response?.status || ''} ${err.message}`);
   }
+  console.log(`[birdeye] got security response: ${!!security}`);
 
   if (!overview && !security) return 0;
 
