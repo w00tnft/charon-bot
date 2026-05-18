@@ -252,6 +252,7 @@ export function initDb() {
   ensureColumn('dry_run_positions', 'partial_tp_done', 'INTEGER DEFAULT 0');
   ensureColumn('dry_run_positions', 'partial_exit_notified', 'INTEGER DEFAULT 0');
   ensureColumn('dry_run_positions', 'exit_class', 'TEXT');
+  ensureColumn('dry_run_positions', 'signal_route', 'TEXT');
   ensureColumn('decision_logs', 'strategy_id', 'TEXT');
 
   const weightInsert = db.prepare('INSERT OR IGNORE INTO route_weights (route, win_count, loss_count, avg_pnl_pct, weight, updated_at_ms) VALUES (?, 0, 0, 0, 1.0, ?)');
@@ -429,6 +430,14 @@ export function initDb() {
     use_llm: false,
     llm_min_confidence: 0,
     min_safety_score: 65,
+    route_min_scores: {
+      fee_trending:           60,
+      fee_graduated:          70,
+      graduated_trending:     75,
+      single_source:          80,
+      fee_graduated_trending: 90,
+      multi_source:           70,
+    },
   }), ts);
 
   // ── Migrations (run on every startup, idempotent) ────────────────────────
@@ -464,6 +473,18 @@ export function initDb() {
     .map(([k, v]) => `json_set(config_json, '$.${k}', ${typeof v === 'number' ? v : `'${v}'`})`)
     .reduce((acc, expr) => `${expr.replace('config_json', acc)}`);
   db.prepare(`UPDATE strategies SET config_json = ${degenMigrationSql} WHERE id = 'degen'`).run();
+
+  // Migrate route_min_scores (object value — handled separately from scalar migrations)
+  db.prepare(`
+    UPDATE strategies SET config_json = json_set(config_json, '$.route_min_scores', json(?)) WHERE id = 'degen'
+  `).run(JSON.stringify({
+    fee_trending:           60,
+    fee_graduated:          70,
+    graduated_trending:     75,
+    single_source:          80,
+    fee_graduated_trending: 90,
+    multi_source:           70,
+  }));
 
   // Log active degen config so we can confirm migration values on every startup
   const degenRow = db.prepare("SELECT config_json FROM strategies WHERE id = 'degen'").get();
