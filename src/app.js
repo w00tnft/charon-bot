@@ -38,6 +38,20 @@ process.on('uncaughtException', (err) => {
 });
 
 export async function startCharon() {
+  // Nuclear Helius connectivity test — runs before anything can throw
+  {
+    const key = process.env.HELIUS_API_KEY;
+    if (key) {
+      const addr = 'MRiYA4oN3158fCV8evhuCofrDzbHyYvYnGZUDJvoCsa';
+      fetch(`https://api.helius.xyz/v0/addresses/${addr}/transactions?api-key=${key}&limit=5&type=SWAP`)
+        .then(r => r.json())
+        .then(d => console.log(`[smart] helius test: ${Array.isArray(d) ? d.length : JSON.stringify(d).slice(0, 80)} tx(s)`))
+        .catch(e => console.log(`[smart] helius test error: ${e.message}`));
+    } else {
+      console.log('[smart] helius test skipped — HELIUS_API_KEY not set');
+    }
+  }
+
   initDb();
   initLiveExecution();
   setupTelegram();
@@ -92,14 +106,20 @@ export async function startCharon() {
     console.log('[bot] PumpPortal feed enabled');
   }
 
-  // Smart money wallet polling (both modes, requires GMGN_API_KEY)
-  const { pollSmartWallets, testSmartMoneyConnection, setCandidateHandler: setSmartHandler, getSmartWallets } = await import('./feeds/smartmoney.js');
-  setSmartHandler(processCandidateFromSignals);
-  const smartWalletCount = getSmartWallets().filter(w => w.active && w.address).length;
-  console.log(`[smart] starting — polling ${smartWalletCount} wallet(s) every ${SMART_MONEY_POLL_MS / 1000}s`);
-  testSmartMoneyConnection().catch(err => console.log(`[smart] test error: ${err.message}`));
-  pollSmartWallets().catch(err => console.log(`[smart] initial poll error: ${err.message}`));
-  addInterval(() => pollSmartWallets().catch(err => console.log(`[smart] ${err.message}`)), SMART_MONEY_POLL_MS);
+  // Smart money wallet polling (both modes)
+  console.log('[smart] importing smartmoney module...');
+  try {
+    const { pollSmartWallets, testSmartMoneyConnection, setCandidateHandler: setSmartHandler, getSmartWallets } = await import('./feeds/smartmoney.js');
+    console.log(`[smart] module loaded OK — testSmartMoneyConnection type: ${typeof testSmartMoneyConnection}`);
+    setSmartHandler(processCandidateFromSignals);
+    const smartWalletCount = getSmartWallets().filter(w => w.active && w.address).length;
+    console.log(`[smart] starting — polling ${smartWalletCount} wallet(s) every ${SMART_MONEY_POLL_MS / 1000}s`);
+    testSmartMoneyConnection().catch(err => console.log(`[smart] test error: ${err.message}`));
+    pollSmartWallets().catch(err => console.log(`[smart] initial poll error: ${err.message}`));
+    addInterval(() => pollSmartWallets().catch(err => console.log(`[smart] ${err.message}`)), SMART_MONEY_POLL_MS);
+  } catch (err) {
+    console.log(`[smart] FATAL import error: ${err.message}`);
+  }
 
   // Position monitoring runs in both modes
   const trackPositions = makeFailureTracker('position monitor', (msg) => sendTelegram(msg));
