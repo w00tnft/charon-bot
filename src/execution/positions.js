@@ -386,13 +386,37 @@ async function maybeUpdateReputation(result) {
 
 export async function monitorPositions() {
   const positions = openPositions();
+
+  // Aggressive time-limit enforcement: close any dry_run position past max_hold_ms
+  // BEFORE attempting price refresh, so dead tokens don't block slots
+  for (const position of positions) {
+    if (position.execution_mode === 'live') continue;
+    const strat = strategyById(position.strategy_id);
+    const maxHoldMs = strat?.max_hold_ms > 0 ? strat.max_hold_ms : 0;
+    if (maxHoldMs > 0) {
+      const ageMs = now() - position.opened_at_ms;
+      if (ageMs >= maxHoldMs) {
+        db.prepare(`
+          UPDATE dry_run_positions
+          SET status = 'closed', closed_at_ms = ?, exit_reason = 'MAX_HOLD', pnl_percent = 0, pnl_sol = 0,
+              exit_class = 'neutral'
+          WHERE id = ? AND status = 'open'
+        `).run(now(), position.id);
+        console.log(`[position] ${position.id} (${position.symbol || position.mint.slice(0, 8)}) MAX_HOLD force-closed after ${Math.round(ageMs / 60000)}m`);
+        await sendPositionExit({ ...position, exitReason: 'MAX_HOLD', pnlPercent: 0, pnl_percent: 0, pnlSol: 0, pnl_sol: 0 }).catch(() => {});
+      }
+    }
+  }
+
+  // Re-fetch open positions after time-limit sweep
+  const activePositions = openPositions();
   let walletPnlData = {};
   const pubkey = liveWalletPubkey();
-  if (pubkey && positions.some(p => p.execution_mode === 'live')) {
+  if (pubkey && activePositions.some(p => p.execution_mode === 'live')) {
     walletPnlData = await fetchJupiterWalletPnl(pubkey);
   }
   let anyExit = false;
-  for (const position of positions) {
+  for (const position of activePositions) {
     const jupiterPnl = position.execution_mode === 'live'
       ? (walletPnlData[position.mint]?.pnl || null)
       : null;

@@ -119,6 +119,11 @@ export async function handleMessage(msg) {
     removeSmartWallet(label);
     return bot.sendMessage(chatId, `Removed ${label}.`);
   }
+  if (text.startsWith('/clearpositions')) {
+    const { closeStuckPositions } = await import('../db/positions.js');
+    const cleared = closeStuckPositions(0); // 0ms = close ALL open dry_run positions
+    return bot.sendMessage(chatId, `✅ Cleared ${cleared} stuck position(s). Slots are now free.`);
+  }
   if (text.startsWith('/walletlist')) return sendSmartWalletList(chatId);
   if (text.startsWith('/walletstats')) return sendSmartWalletStats(chatId);
   if (text.startsWith('/wallets')) return handleCallback({ id: 'manual', data: 'menu:wallets', message: { chat: { id: chatId } } });
