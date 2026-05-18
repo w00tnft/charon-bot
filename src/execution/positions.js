@@ -152,8 +152,34 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
   let closed = false;
   let partialFired = false;
 
+  // ── Full-exit system (degen: TP at flat %, no runner) ─────────────────────
+  if (strat?.exit_type === 'full') {
+    const tpPct = strat.take_profit_pct ?? 15;
+    const hardStopPct = Math.abs(strat.hard_stop_pct ?? 25);
+    const emergencyPct = Math.abs(strat.emergency_stop_pct ?? 40);
+    const maxHoldMs = strat.max_hold_ms ?? 0;
+
+    db.prepare('UPDATE dry_run_positions SET high_water_mcap = ?, high_water_price = ? WHERE id = ?')
+      .run(highWaterMcap, highWaterPrice, position.id);
+
+    if (!exitReason && maxHoldMs > 0 && (now() - position.opened_at_ms) >= maxHoldMs) {
+      exitReason = 'MAX_HOLD';
+    }
+    if (!exitReason && pnlPercent <= -emergencyPct) {
+      console.log(`[position] EMERGENCY $${position.symbol} ${pnlPercent.toFixed(1)}% ❌`);
+      exitReason = 'EMERGENCY_STOP';
+    }
+    if (!exitReason && pnlPercent <= -hardStopPct) {
+      console.log(`[position] HARD STOP $${position.symbol} ${pnlPercent.toFixed(1)}% ❌`);
+      exitReason = 'HARD_SL';
+    }
+    if (!exitReason && pnlPercent >= tpPct) {
+      console.log(`[position] TP HIT $${position.symbol} +${pnlPercent.toFixed(1)}% ✅`);
+      exitReason = 'TP';
+    }
+
   // ── New partial-exit + trailing-stop system ────────────────────────────────
-  if (strat?.partial_exit_pct != null) {
+  } else if (strat?.partial_exit_pct != null) {
     const partialExitPct = strat.partial_exit_pct;
     const partialExitSize = strat.partial_exit_size ?? 0.60;
     const trailingStopPct = strat.trailing_stop_pct ?? 20;

@@ -120,7 +120,58 @@ export async function handleMessage(msg) {
     return bot.sendMessage(chatId, `Removed ${label}.`);
   }
   if (text.startsWith('/resetstats')) {
-    if (!text.includes('confirm')) {
+    const isSelective = text.includes('selective');
+    const isConfirm = text.includes('confirm');
+
+    if (isSelective && !isConfirm) {
+      // Selective reset warning
+      const posBefore = db.prepare("SELECT COUNT(*) AS c FROM dry_run_positions").get().c;
+      const tradesBefore = db.prepare("SELECT COUNT(*) AS c FROM dry_run_trades").get().c;
+      const lessonsBefore = db.prepare("SELECT COUNT(*) AS c FROM learning_lessons").get().c;
+      const blCount = db.prepare("SELECT COUNT(*) AS c FROM blacklist").get().c;
+      const swCount = db.prepare("SELECT COUNT(*) AS c FROM smart_wallets WHERE active = 1").get().c;
+      return bot.sendMessage(chatId,
+        '⚠️ <b>SELECTIVE RESET — will wipe trade history, keep smart memory</b>\n\n' +
+        '🗑️ Will WIPE:\n' +
+        `▸ Positions: ${posBefore} | Trades: ${tradesBefore}\n` +
+        '▸ Capital snapshots\n' +
+        '▸ Route weights (reset to 1.0×)\n\n' +
+        '🧠 Will KEEP:\n' +
+        `▸ Lessons: ${lessonsBefore} | Blacklist: ${blCount}\n` +
+        `▸ Smart wallets: ${swCount} | Strategies\n\n` +
+        'Send <code>/resetstats selective confirm</code> to proceed.',
+        { parse_mode: 'HTML' }
+      );
+    }
+
+    if (isSelective && isConfirm) {
+      // Selective reset — wipe trades, keep learning
+      const tradesBefore = db.prepare("SELECT COUNT(*) AS c FROM dry_run_trades").get().c;
+      const lessonsBefore = db.prepare("SELECT COUNT(*) AS c FROM learning_lessons WHERE active = 1").get().c;
+      const blCount = db.prepare("SELECT COUNT(*) AS c FROM blacklist").get().c;
+      const swCount = db.prepare("SELECT COUNT(*) AS c FROM smart_wallets WHERE active = 1").get().c;
+
+      db.prepare('DELETE FROM dry_run_positions').run();
+      db.prepare('DELETE FROM dry_run_trades').run();
+      db.prepare('DELETE FROM capital_snapshots').run();
+      db.prepare(`
+        UPDATE route_weights SET weight = 1.0, win_count = 0, loss_count = 0,
+          avg_pnl_pct = 0, updated_at_ms = ?
+      `).run(Date.now());
+      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('starting_capital_sol', '1.0')").run();
+      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('last_auto_learn_count', '0')").run();
+
+      return bot.sendMessage(chatId,
+        '✅ <b>SELECTIVE RESET DONE</b>\n\n' +
+        `🗑️ Wiped: Trades: ${tradesBefore} | Capital: reset | Route weights: reset\n` +
+        `🧠 Kept: Lessons: ${lessonsBefore} active | Blacklist: ${blCount} | Smart wallets: ${swCount}\n\n` +
+        '🚀 Clean history, smart memory! Learning fires at 25 closes.',
+        { parse_mode: 'HTML' }
+      );
+    }
+
+    if (!isConfirm) {
+      // Full reset warning
       return bot.sendMessage(chatId,
         '⚠️ <b>WARNING: This will delete all trading history.</b>\n\n' +
         'Will clear:\n' +
@@ -130,11 +181,13 @@ export async function handleMessage(msg) {
         'Will keep:\n' +
         '▸ Blacklist, whitelist, smart wallets\n' +
         '▸ Strategy config, TP/SL rules\n\n' +
-        'Send <code>/resetstats confirm</code> to proceed.',
+        'Send <code>/resetstats confirm</code> to proceed.\n' +
+        'Or send <code>/resetstats selective</code> to keep smart memory.',
         { parse_mode: 'HTML' }
       );
     }
-    // Count before deletion for the summary
+
+    // Full reset
     const posBefore = db.prepare("SELECT COUNT(*) AS c FROM dry_run_positions").get().c;
     const lessonsBefore = db.prepare("SELECT COUNT(*) AS c FROM learning_lessons").get().c;
     const blCount = db.prepare("SELECT COUNT(*) AS c FROM blacklist").get().c;
