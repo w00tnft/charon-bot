@@ -26,12 +26,21 @@ export async function pollSmartWallets() {
 
   pruneSeenSmartSignals();
 
+  let firstWallet = true;
   for (const { address, label } of wallets) {
     try {
-      // Use the same openapi.gmgn.ai base + X-APIKEY auth as the rest of the codebase
       const res = await gmgnFetch(`/defi/quotation/v1/wallet_activity/sol`, {
         params: { wallet: address, limit: 10, type: 'buy' },
       });
+
+      // Log raw response for first wallet each poll cycle to aid debugging
+      if (firstWallet) {
+        firstWallet = false;
+        const keys = res ? Object.keys(res) : [];
+        const actCount = (res?.data?.activities || res?.activities || []).length;
+        console.log(`[smart] debug ${label}: keys=${keys.join(',') || 'none'} activities=${actCount}`);
+      }
+
       const activities = res?.data?.activities || res?.activities || [];
       const cutoff = now() - 60_000;
 
