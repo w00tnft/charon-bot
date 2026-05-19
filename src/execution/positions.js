@@ -133,11 +133,14 @@ async function doLiveSell(position, reason, price, mcap) {
 
 export async function refreshPosition(position, { autoExit = true, jupiterPnl = null } = {}) {
   const asset = await fetchJupiterAsset(position.mint);
-  const price = firstPositiveNumber(asset?.usdPrice, position.high_water_price, position.entry_price);
-  const mcap = firstPositiveNumber(asset?.mcap, asset?.fdv, position.high_water_mcap, position.entry_mcap);
-  if (!Number.isFinite(Number(mcap)) || !Number.isFinite(Number(position.entry_mcap)) || Number(position.entry_mcap) <= 0) {
-    return null;
+  // Only use live Jupiter mcap for PnL — never fall back to stored values.
+  // Falling back to entry_mcap/high_water makes a rugged token look like 0% loss.
+  const liveMcap = firstPositiveNumber(asset?.mcap, asset?.fdv);
+  if (!liveMcap || !Number.isFinite(Number(position.entry_mcap)) || Number(position.entry_mcap) <= 0) {
+    return null; // no live price → handled by no-price fallback path
   }
+  const price = firstPositiveNumber(asset?.usdPrice, position.high_water_price, position.entry_price);
+  const mcap = liveMcap;
   const highWaterMcap = Math.max(Number(position.high_water_mcap || 0), Number(mcap));
   const highWaterPrice = Math.max(Number(position.high_water_price || 0), Number(price || 0));
   let pnlPercent = (Number(mcap) / Number(position.entry_mcap) - 1) * 100;
@@ -352,6 +355,7 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
 }
 
 const DRY_RUN_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+const ABSOLUTE_MAX_HOLD_MS = 25 * 60_000; // 25 min — hard ceiling for all dry-run positions
 
 async function maybeAutoLearn() {
   const { count: total } = db.prepare("SELECT COUNT(*) AS count FROM dry_run_positions WHERE status = 'closed'").get();
@@ -414,23 +418,22 @@ export async function monitorPositions() {
   const positions = openPositions();
 
   // Aggressive time-limit enforcement: close any dry_run position past max_hold_ms
-  // BEFORE attempting price refresh, so dead tokens don't block slots
+  // BEFORE attempting price refresh, so dead tokens don't block slots.
+  // Falls back to ABSOLUTE_MAX_HOLD_MS when strat is null (legacy/migrated positions).
   for (const position of positions) {
     if (position.execution_mode === 'live') continue;
     const strat = strategyById(position.strategy_id);
-    const maxHoldMs = strat?.max_hold_ms > 0 ? strat.max_hold_ms : 0;
-    if (maxHoldMs > 0) {
-      const ageMs = now() - position.opened_at_ms;
-      if (ageMs >= maxHoldMs) {
-        db.prepare(`
-          UPDATE dry_run_positions
-          SET status = 'closed', closed_at_ms = ?, exit_reason = 'MAX_HOLD', pnl_percent = 0, pnl_sol = 0,
-              exit_class = 'neutral'
-          WHERE id = ? AND status = 'open'
-        `).run(now(), position.id);
-        console.log(`[position] ${position.id} (${position.symbol || position.mint.slice(0, 8)}) MAX_HOLD force-closed after ${Math.round(ageMs / 60000)}m`);
-        await sendPositionExit({ ...position, exitReason: 'MAX_HOLD', pnlPercent: 0, pnl_percent: 0, pnlSol: 0, pnl_sol: 0 }).catch(() => {});
-      }
+    const maxHoldMs = strat?.max_hold_ms > 0 ? strat.max_hold_ms : ABSOLUTE_MAX_HOLD_MS;
+    const ageMs = now() - position.opened_at_ms;
+    if (ageMs >= maxHoldMs) {
+      db.prepare(`
+        UPDATE dry_run_positions
+        SET status = 'closed', closed_at_ms = ?, exit_reason = 'MAX_HOLD', pnl_percent = 0, pnl_sol = 0,
+            exit_class = 'neutral'
+        WHERE id = ? AND status = 'open'
+      `).run(now(), position.id);
+      console.log(`[position] ${position.id} (${position.symbol || position.mint.slice(0, 8)}) MAX_HOLD force-closed after ${Math.round(ageMs / 60000)}m`);
+      await sendPositionExit({ ...position, exitReason: 'MAX_HOLD', pnlPercent: 0, pnl_percent: 0, pnlSol: 0, pnl_sol: 0 }).catch(() => {});
     }
   }
 
@@ -443,6 +446,29 @@ export async function monitorPositions() {
   }
   let anyExit = false;
   for (const position of activePositions) {
+    const sym = position.symbol || position.mint.slice(0, 8);
+    const lastPnl = Number(position.pnl_percent || 0);
+    const ageMins = Math.round((now() - position.opened_at_ms) / 60000);
+    console.log(`[monitor] $${sym} pnl: ${lastPnl.toFixed(1)}% age: ${ageMins}m`);
+
+    // Pre-cycle emergency: fire on stored pnl before even fetching price
+    if (position.execution_mode !== 'live' && lastPnl !== 0) {
+      const preStrat = strategyById(position.strategy_id);
+      const preEmergencyPct = Math.abs(preStrat?.emergency_stop_pct ?? 40);
+      if (lastPnl <= -preEmergencyPct) {
+        db.prepare(`
+          UPDATE dry_run_positions
+          SET status = 'closed', closed_at_ms = ?, exit_reason = 'EMERGENCY_STOP',
+              pnl_percent = ?, pnl_sol = ?, exit_class = 'loss'
+          WHERE id = ? AND status = 'open'
+        `).run(now(), lastPnl, Number(position.size_sol) * lastPnl / 100, position.id);
+        console.log(`[position] PRE-CYCLE EMERGENCY $${sym} — stored pnl ${lastPnl.toFixed(1)}% <= -${preEmergencyPct}% ❌`);
+        await sendPositionExit({ ...position, exitReason: 'EMERGENCY_STOP', pnlPercent: lastPnl, pnl_percent: lastPnl, exit_class: 'loss' }).catch(() => {});
+        anyExit = true;
+        continue;
+      }
+    }
+
     const jupiterPnl = position.execution_mode === 'live'
       ? (walletPnlData[position.mint]?.pnl || null)
       : null;

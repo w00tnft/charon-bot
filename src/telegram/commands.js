@@ -498,7 +498,7 @@ export async function sendSummary(chatId) {
 }
 
 export async function sendPnl(chatId, query = null) {
-  const closed = db.prepare("SELECT pnl_percent, pnl_sol, snapshot_json FROM dry_run_positions WHERE status = 'closed'").all();
+  const closed = db.prepare("SELECT pnl_percent, pnl_sol, exit_class, snapshot_json FROM dry_run_positions WHERE status = 'closed'").all();
   if (!closed.length) {
     const text = '📊 <b>PnL</b>\n\nNo closed positions yet.';
     return query ? editMenuMessage(query, text, navKeyboard()) : bot.sendMessage(chatId, text, { parse_mode: 'HTML' });

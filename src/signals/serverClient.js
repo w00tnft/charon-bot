@@ -124,6 +124,9 @@ export async function fetchServerSignals() {
         if (tokenAge > strat.token_age_max_ms) { processed++; continue; }
       }
 
+      // Debug: log raw signal fields so we can verify what thecharon.xyz actually sends
+      console.log(`[route] ${signal.symbol || mint.slice(0, 8)} — sources: ${JSON.stringify(signal.sources)} feeClaim: ${hasFee} graduated: ${Boolean(graduatedCoin)} trending: ${Boolean(trendingToken)} sourceCount: ${sourceCount}`);
+
       // Determine route
       let route = null;
       if (hasFee && graduatedCoin && trendingToken) route = 'fee_graduated_trending';
