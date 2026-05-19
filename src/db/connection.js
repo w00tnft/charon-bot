@@ -299,6 +299,14 @@ export function initDb() {
   const insert = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
   for (const [key, value] of Object.entries(defaults)) insert.run(key, value);
 
+  // ENV VAR ALWAYS WINS for trading_mode — INSERT OR IGNORE would silently ignore changes
+  // after first startup, causing TRADING_MODE=live on Railway to have no effect.
+  if (process.env.TRADING_MODE) {
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('trading_mode', ?)").run(process.env.TRADING_MODE);
+  }
+  const tradingMode = db.prepare("SELECT value FROM settings WHERE key = 'trading_mode'").get()?.value ?? 'dry_run';
+  console.log(`[config] trading_mode: ${tradingMode}${process.env.TRADING_MODE ? ' (from env var)' : ' (from db — set TRADING_MODE env var to override)'}`);
+
   // Seed default strategies
   const stratInsert = db.prepare('INSERT OR IGNORE INTO strategies (id, name, enabled, config_json, created_at_ms) VALUES (?, ?, ?, ?, ?)');
   const ts = Date.now();
