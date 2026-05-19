@@ -259,14 +259,6 @@ export async function buildCandidate({ mint, fee = null, signature = null, gradu
     }
   }
 
-  // fee_trending route bonus (+15): historically best performing route
-  if (toCanonicalRoute(signalRoute) === 'fee_trending') {
-    const before = candidate.safety.score;
-    const boostedScore = Math.min(100, before + 15);
-    candidate.safety = { ...candidate.safety, score: boostedScore, passed: boostedScore >= 65 };
-    console.log(`[candidate] fee_trending bonus +15 → score ${before} → ${boostedScore}`);
-  }
-
   // Whitelist deployer bonus (+15)
   if (deployerAddress && isWhitelisted(deployerAddress)) {
     const sym = candidate.token.symbol || mint.slice(0, 8);

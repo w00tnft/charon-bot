@@ -30,6 +30,7 @@ import { consumeNumericFilterInput } from './input.js';
 import { getBlacklist } from '../db/blacklist.js';
 import { sendDailyReport } from './report.js';
 import { runLearning, sendLessons } from '../learning/commands.js';
+import { autoStatusText } from '../learning/autotuner.js';
 import { addSmartWallet, removeSmartWallet, getSmartWallets, smartWalletStats } from '../feeds/smartmoney.js';
 
 export async function handleMessage(msg) {
@@ -95,6 +96,7 @@ export async function handleMessage(msg) {
     return runLearning(chatId, windowArg);
   }
   if (text.startsWith('/lessons')) return sendLessons(chatId);
+  if (text.startsWith('/autostatus')) return bot.sendMessage(chatId, autoStatusText(), { parse_mode: 'HTML' });
   if (text.startsWith('/candidate')) {
     const mint = text.split(/\s+/)[1];
     if (!mint) return bot.sendMessage(chatId, 'Usage: /candidate <mint>');
@@ -413,6 +415,7 @@ export function setupTelegram() {
     { command: 'pnl', description: 'PnL breakdown by route and totals' },
     { command: 'learn', description: 'Run manual learning report' },
     { command: 'lessons', description: 'Show active screening lessons' },
+    { command: 'autostatus', description: 'Auto-tuner status: route weights, tune timestamps, win rate trend' },
     { command: 'setfilter', description: 'Set a filter value' },
     { command: 'walletadd', description: 'Add smart money wallet to track' },
     { command: 'walletlist', description: 'List smart money wallets' },

@@ -7,6 +7,7 @@ import { summarizeLearningWindow } from './summary.js';
 import { generateLessons, storeLearningRun } from './lessons.js';
 import { learningReportText } from './report.js';
 import { recalculateWeights, allRouteWeights } from './weights.js';
+import { autoTuneRoutes } from './autotuner.js';
 
 function tierStatsText() {
   const rows = db.prepare(`
@@ -72,6 +73,7 @@ export async function autoRunLearning(milestone) {
   const tierText = tierStatsText();
   if (tierText) await sendTelegram(tierText);
   recalculateWeights();
+  autoTuneRoutes();
   await sendTelegram(weightsText(allRouteWeights()));
 }
 

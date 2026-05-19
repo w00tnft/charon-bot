@@ -13,6 +13,7 @@ import { runCleanup, isDueForCleanup } from './db/cleanup.js';
 import { makeFailureTracker } from './utils.js';
 import { seedRouteWeightOverrides } from './learning/weights.js';
 import { deduplicateLessons } from './learning/lessons.js';
+import { checkEmergencyConditions, autoTuneFilters, dailyAudit } from './learning/autotuner.js';
 
 setDefaultResultOrder('ipv4first');
 validateConfig();
@@ -165,6 +166,21 @@ export async function startCharon() {
     // Daily DB cleanup
     if (isDueForCleanup()) {
       try { runCleanup(); } catch (err) { console.log(`[cleanup] error: ${err.message}`); }
+    }
+
+    // Auto-tuner: emergency checks every hour
+    await checkEmergencyConditions().catch(err => console.log(`[autotune] ${err.message}`));
+
+    // Auto-tuner: filter tune weekly
+    const lastFilterTune = numSetting('last_filter_tune_ms', 0);
+    if (Date.now() - lastFilterTune > 7 * 24 * 60 * 60 * 1000) {
+      try { autoTuneFilters(); } catch (err) { console.log(`[autotune] filter tune: ${err.message}`); }
+    }
+
+    // Auto-tuner: daily audit
+    const lastDailyAudit = numSetting('last_daily_audit_ms', 0);
+    if (Date.now() - lastDailyAudit > 24 * 60 * 60 * 1000) {
+      await dailyAudit().catch(err => console.log(`[autotune] daily audit: ${err.message}`));
     }
   };
   addInterval(() => hourlyMaintenance().catch(err => console.log(`[maintenance] ${err.message}`)), 60 * 60 * 1000);

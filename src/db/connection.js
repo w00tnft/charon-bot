@@ -478,7 +478,7 @@ export function initDb() {
   db.prepare(`
     UPDATE strategies SET config_json = json_set(config_json, '$.route_min_scores', json(?)) WHERE id = 'degen'
   `).run(JSON.stringify({
-    fee_trending:           60,
+    fee_trending:           999,
     fee_graduated:          70,
     graduated_trending:     75,
     single_source:          80,
