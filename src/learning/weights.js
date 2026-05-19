@@ -3,7 +3,7 @@ import { now } from '../utils.js';
 
 const LESSON_OVERRIDES = {
   fee_graduated_trending: 0.3,   // avoid — -3.8% avg PnL
-  fee_trending:           1.5,   // strong signal — +6% avg PnL
+  fee_trending:           0.1,   // disabled — 0W/13N/1L avg -2.2%
   fee_graduated:          1.1,   // reliable dual-source
   graduated_trending:     1.0,   // neutral
   fee_claim:              1.0,

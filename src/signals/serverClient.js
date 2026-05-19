@@ -137,6 +137,13 @@ export async function fetchServerSignals() {
       else if (sourceCount >= 2) route = 'dual_source';
       else route = 'single_source';
 
+      // fee_trending is disabled — skip before any enrichment
+      if (route === 'fee_trending') {
+        console.log(`[candidate] ${signal.symbol || mint.slice(0, 8)} SKIPPED — fee_trending disabled`);
+        processed++;
+        continue;
+      }
+
       // Build fee object if present
       let fee = null;
       let signature = null;
