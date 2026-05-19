@@ -431,12 +431,13 @@ export function initDb() {
     llm_min_confidence: 0,
     min_safety_score: 65,
     route_min_scores: {
-      fee_trending:           60,
+      fee_trending:           65,
       fee_graduated:          70,
       graduated_trending:     75,
       single_source:          80,
       fee_graduated_trending: 90,
       multi_source:           70,
+      pumpportal_survivor:    65,
     },
   }), ts);
 
@@ -478,12 +479,13 @@ export function initDb() {
   db.prepare(`
     UPDATE strategies SET config_json = json_set(config_json, '$.route_min_scores', json(?)) WHERE id = 'degen'
   `).run(JSON.stringify({
-    fee_trending:           999,
+    fee_trending:           65,
     fee_graduated:          70,
     graduated_trending:     75,
     single_source:          80,
     fee_graduated_trending: 90,
     multi_source:           70,
+    pumpportal_survivor:    65,
   }));
 
   // Log active degen config so we can confirm migration values on every startup
