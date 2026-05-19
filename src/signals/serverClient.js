@@ -124,6 +124,16 @@ export async function fetchServerSignals() {
         if (tokenAge > strat.token_age_max_ms) { processed++; continue; }
       }
 
+      // Signal age filter — skip stale signals from thecharon.xyz (> 60s old)
+      if (signal.timestamp) {
+        const signalAge = Date.now() - signal.timestamp * 1000;
+        if (signalAge > 60_000) {
+          console.log(`[server] ${signal.symbol || mint.slice(0, 8)} skipped — signal age: ${Math.round(signalAge / 1000)}s (too old)`);
+          processed++;
+          continue;
+        }
+      }
+
       // Debug: log raw signal fields so we can verify what thecharon.xyz actually sends
       console.log(`[route] ${signal.symbol || mint.slice(0, 8)} — sources: ${JSON.stringify(signal.sources)} feeClaim: ${hasFee} graduated: ${Boolean(graduatedCoin)} trending: ${Boolean(trendingToken)} sourceCount: ${sourceCount}`);
 
@@ -136,13 +146,6 @@ export async function fetchServerSignals() {
       else if (sourceCount >= 3) route = 'multi_source';
       else if (sourceCount >= 2) route = 'dual_source';
       else route = 'single_source';
-
-      // fee_trending is disabled — skip before any enrichment
-      if (route === 'fee_trending') {
-        console.log(`[candidate] ${signal.symbol || mint.slice(0, 8)} SKIPPED — fee_trending disabled`);
-        processed++;
-        continue;
-      }
 
       // Build fee object if present
       let fee = null;

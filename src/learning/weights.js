@@ -3,18 +3,20 @@ import { now } from '../utils.js';
 
 const LESSON_OVERRIDES = {
   fee_graduated_trending: 0.3,   // avoid — -3.8% avg PnL
-  fee_trending:           0.1,   // disabled — 0W/13N/1L avg -2.2%
+  fee_trending:           1.0,   // neutral — re-enabled for clean data collection
   fee_graduated:          1.1,   // reliable dual-source
   graduated_trending:     1.0,   // neutral
   fee_claim:              1.0,
   graduated:              1.0,
   trending:               1.0,
   single_source:          1.0,
+  pumpportal_survivor:    1.1,   // slight boost — fresh real-time survivor signal
 };
 
 export function toCanonicalRoute(route) {
   if (!route) return 'single_source';
   const r = String(route).toLowerCase();
+  if (r.includes('pumpportal')) return 'pumpportal_survivor';
   const hasFee = r.includes('fee');
   const hasGraduated = r.includes('graduated');
   const hasTrending = r.includes('trending');
