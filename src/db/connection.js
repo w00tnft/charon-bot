@@ -420,7 +420,7 @@ export function initDb() {
     position_size_sol: 0.05,
     max_open_positions: 10,
     exit_type: 'full',
-    take_profit_pct: 15,
+    take_profit_pct: 12,
     partial_exit_pct: 0,
     partial_exit_size: 0,
     trailing_stop_pct: 0,
@@ -431,13 +431,14 @@ export function initDb() {
     llm_min_confidence: 0,
     min_safety_score: 65,
     route_min_scores: {
-      fee_trending:           65,
+      fee_trending:           60,
       fee_graduated:          70,
-      graduated_trending:     75,
+      graduated_trending:     999,
       single_source:          80,
       fee_graduated_trending: 90,
       multi_source:           70,
-      pumpportal_survivor:    65,
+      dual_source:            65,
+      pumpportal_survivor:    60,
     },
   }), ts);
 
@@ -461,7 +462,7 @@ export function initDb() {
     trending_max_bundler_rate: 0.25,
     max_open_positions: 10,
     exit_type: 'full',
-    take_profit_pct: 15,
+    take_profit_pct: 12,
     partial_exit_pct: 0,
     partial_exit_size: 0,
     trailing_stop_pct: 0,
@@ -479,13 +480,14 @@ export function initDb() {
   db.prepare(`
     UPDATE strategies SET config_json = json_set(config_json, '$.route_min_scores', json(?)) WHERE id = 'degen'
   `).run(JSON.stringify({
-    fee_trending:           65,
+    fee_trending:           60,
     fee_graduated:          70,
-    graduated_trending:     75,
+    graduated_trending:     999,
     single_source:          80,
     fee_graduated_trending: 90,
     multi_source:           70,
-    pumpportal_survivor:    65,
+    dual_source:            65,
+    pumpportal_survivor:    60,
   }));
 
   // Log active degen config so we can confirm migration values on every startup

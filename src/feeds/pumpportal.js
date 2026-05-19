@@ -2,7 +2,7 @@ import WebSocket from 'ws';
 import { now } from '../utils.js';
 import { fetchJupiterAsset } from '../enrichment/jupiter.js';
 
-const SURVIVOR_WAIT_MS = 3 * 60_000;       // wait 3 min before checking
+const SURVIVOR_WAIT_MS = 2 * 60_000;       // wait 2 min before checking (meme pumps are fast)
 const SURVIVOR_MAX_AGE_MS = 10 * 60_000;   // discard pending tokens older than 10 min
 const SURVIVOR_CHECK_INTERVAL_MS = 30_000; // poll pending tokens every 30s
 const SURVIVOR_MCAP_RATIO = 0.7;           // must retain 70% of initial mcap
