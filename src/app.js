@@ -1,5 +1,5 @@
 import { setDefaultResultOrder } from 'node:dns';
-import { APP_NAME, SIGNAL_SERVER_URL, SIGNAL_POLL_MS, GRADUATED_POLL_MS, TRENDING_POLL_MS, POSITION_CHECK_MS, REPORT_INTERVAL_MS, PUMPPORTAL_ENABLED, SMART_MONEY_POLL_MS, SMART_MONEY_ENABLED, ACCELERATED_DRY_RUN, POSITION_PRICE_CHECK_INTERVAL_MS, BACKTEST_AUTO_RUN, DEXSCREENER_TRENDING_POLL_MS, validateConfig } from './config.js';
+import { APP_NAME, SIGNAL_SERVER_URL, SIGNAL_POLL_MS, GRADUATED_POLL_MS, TRENDING_POLL_MS, POSITION_CHECK_MS, REPORT_INTERVAL_MS, SMART_MONEY_POLL_MS, SMART_MONEY_ENABLED, ACCELERATED_DRY_RUN, POSITION_PRICE_CHECK_INTERVAL_MS, BACKTEST_AUTO_RUN, DEXSCREENER_TRENDING_POLL_MS, validateConfig } from './config.js';
 import { initDb } from './db/connection.js';
 import { db } from './db/connection.js';
 import { initLiveExecution } from './liveExecutor.js';
@@ -194,15 +194,13 @@ export async function startCharon() {
     startWebsocket();
   }
 
-  // PumpPortal real-time feed (optional)
-  if (PUMPPORTAL_ENABLED) {
-    const { startPumpPortal, setCandidateHandler: setPumpHandler } = await import('./feeds/pumpportal.js');
-    setPumpHandler(processCandidateFromSignals);
-    startPumpPortal();
-    console.log('[bot] PumpPortal feed enabled');
-  } else {
-    console.log('[PUMPORTAL] Disabled — avoiding small cap launches');
-  }
+  // [DISABLED] PumpPortal — small cap only, incompatible with mid-cap webhook strategy
+  // if (PUMPPORTAL_ENABLED) {
+  //   const { startPumpPortal, setCandidateHandler: setPumpHandler } = await import('./feeds/pumpportal.js');
+  //   setPumpHandler(processCandidateFromSignals);
+  //   startPumpPortal();
+  // }
+  console.log('[PUMPORTAL] Permanently disabled — mid-cap strategy uses Helius webhooks + DexScreener');
 
   // Smart money wallet polling (gated — disabled by default)
   if (SMART_MONEY_ENABLED) {
