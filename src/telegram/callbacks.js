@@ -17,7 +17,7 @@ import {
   strategyMenuText,
   strategyKeyboard,
 } from './menus.js';
-import { sendTelegram, sendBatch, sendPositionOpen, sendTradeIntent } from './send.js';
+import { sendTelegram, sendBatch, sendPositionOpen, sendTradeIntent, safeSend, stripHtml } from './send.js';
 import { candidateSummary } from './format.js';
 import { candidateById, updateCandidateStatus } from '../db/candidates.js';
 import { storeDecision, logDecisionEvent } from '../db/decisions.js';
@@ -89,13 +89,13 @@ export async function handleCallback(query) {
   if (kind === 'cand') return sendCandidate(chatId, Number(id));
   if (kind === 'ign') {
     updateCandidateStatus(Number(id), 'ignored');
-    return bot.sendMessage(chatId, 'Ignored candidate.');
+    return safeSend(chatId, 'Ignored candidate.');
   }
   if (kind === 'buy') {
     const row = candidateById(Number(id));
-    if (!row) return bot.sendMessage(chatId, 'Candidate not found.');
+    if (!row) return safeSend(chatId, 'Candidate not found.');
     if (!canOpenMorePositions()) {
-      return bot.sendMessage(chatId, `Max open positions reached (${openPositionCount()}/${numSetting('max_open_positions', 3)}). Close one first or raise the limit.`);
+      return safeSend(chatId, `Max open positions reached (${openPositionCount()}/${numSetting('max_open_positions', 3)}). Close one first or raise the limit.`);
     }
     const candidate = row.candidate;
     const decision = { verdict: 'BUY', confidence: 100, reason: 'Manual dry buy', risks: [], suggested_tp_percent: numSetting('default_tp_percent', 50), suggested_sl_percent: numSetting('default_sl_percent', -25) };
@@ -134,25 +134,23 @@ async function answerCallback(query, text = '') {
 export async function editMenuMessage(query, text, extra = {}) {
   const chatId = query.message?.chat?.id || TELEGRAM_CHAT_ID;
   const messageId = query.message?.message_id;
+  const safeText = stripHtml(text);
   if (!messageId) {
-    return bot.sendMessage(chatId, text, {
-      parse_mode: 'HTML',
+    return bot.sendMessage(chatId, safeText, {
       disable_web_page_preview: true,
       ...extra,
     });
   }
   try {
-    return await bot.editMessageText(text, {
+    return await bot.editMessageText(safeText, {
       chat_id: chatId,
       message_id: messageId,
-      parse_mode: 'HTML',
       disable_web_page_preview: true,
       ...extra,
     });
   } catch (err) {
     if (/message is not modified/i.test(err.message)) return null;
-    return bot.sendMessage(chatId, text, {
-      parse_mode: 'HTML',
+    return bot.sendMessage(chatId, safeText, {
       disable_web_page_preview: true,
       ...extra,
     });
@@ -215,7 +213,7 @@ async function handleStratConfig(query, chatId, key) {
   }
 
   // Fallback: show current value
-  return bot.sendMessage(chatId, `Current ${key}: ${formatStratValue(key, strat[key])}\nUse /stratset ${strat.id} ${key} <value> to change.`);
+  return safeSend(chatId, `Current ${key}: ${formatStratValue(key, strat[key])}\nUse /stratset ${strat.id} ${key} <value> to change.`);
 }
 
 async function updateSettingFromButton(query, key, value) {
@@ -249,7 +247,7 @@ async function updateSettingFromButton(query, key, value) {
     'default_trailing_enabled',
     'default_trailing_percent',
   ]);
-  if (!valid.has(key) || value == null) return bot.sendMessage(chatId, 'Unknown setting.');
+  if (!valid.has(key) || value == null) return safeSend(chatId, 'Unknown setting.');
   setSetting(key, value);
   const text = key.startsWith('default_') || key === 'dry_run_buy_sol' || key === 'trading_mode' || key === 'llm_min_confidence' || key === 'llm_candidate_pick_count' || key === 'llm_candidate_max_age_ms' || key === 'max_open_positions'
     ? agentText()
