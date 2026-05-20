@@ -1,6 +1,7 @@
 import { setDefaultResultOrder } from 'node:dns';
-import { APP_NAME, SIGNAL_SERVER_URL, SIGNAL_POLL_MS, GRADUATED_POLL_MS, TRENDING_POLL_MS, POSITION_CHECK_MS, REPORT_INTERVAL_MS, PUMPPORTAL_ENABLED, SMART_MONEY_POLL_MS, validateConfig } from './config.js';
+import { APP_NAME, SIGNAL_SERVER_URL, SIGNAL_POLL_MS, GRADUATED_POLL_MS, TRENDING_POLL_MS, POSITION_CHECK_MS, REPORT_INTERVAL_MS, PUMPPORTAL_ENABLED, SMART_MONEY_POLL_MS, SMART_MONEY_ENABLED, validateConfig } from './config.js';
 import { initDb } from './db/connection.js';
+import { db } from './db/connection.js';
 import { initLiveExecution } from './liveExecutor.js';
 import { setupTelegram } from './telegram/commands.js';
 import { monitorPositions } from './execution/positions.js';
@@ -10,10 +11,13 @@ import { sendTelegram, probeTelegram } from './telegram/send.js';
 import { sendDailyReport } from './telegram/report.js';
 import { numSetting } from './db/settings.js';
 import { runCleanup, isDueForCleanup } from './db/cleanup.js';
-import { makeFailureTracker } from './utils.js';
+import { makeFailureTracker, now } from './utils.js';
 import { seedRouteWeightOverrides } from './learning/weights.js';
 import { deduplicateLessons } from './learning/lessons.js';
 import { checkEmergencyConditions, autoTuneFilters, dailyAudit } from './learning/autotuner.js';
+import { fetchJupiterAsset } from './enrichment/jupiter.js';
+import { executeLiveSell } from './execution/router.js';
+import { escapeHtml } from './format.js';
 
 setDefaultResultOrder('ipv4first');
 validateConfig();
@@ -33,13 +37,68 @@ function shutdown(signal) {
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT',  () => shutdown('SIGINT'));
 
-// Prevent unhandled async errors from silently killing the process
 process.on('unhandledRejection', (err) => {
   console.error('[app] unhandledRejection:', err?.message ?? err);
 });
 process.on('uncaughtException', (err) => {
   console.error('[app] uncaughtException:', err?.message ?? err);
 });
+
+// ── Nuclear stop — independent safety loop at -30% ────────────────────────
+// Runs on its own setInterval so it cannot be blocked by the main trading loop.
+// Catches positions that escape the main monitor due to stale price data or bugs.
+async function nuclearStopCheck() {
+  const positions = db.prepare("SELECT * FROM dry_run_positions WHERE status = 'open'").all();
+  for (const pos of positions) {
+    try {
+      // Try fresh Jupiter price first
+      let pnlPercent = Number(pos.pnl_percent || 0);
+      let exitPrice = pos.high_water_price || pos.entry_price;
+      let exitMcap  = pos.high_water_mcap  || pos.entry_mcap;
+
+      const asset = await fetchJupiterAsset(pos.mint).catch(() => null);
+      if (asset?.mcap && Number(pos.entry_mcap) > 0) {
+        exitMcap   = Number(asset.mcap);
+        exitPrice  = asset.usdPrice || exitPrice;
+        pnlPercent = (exitMcap / Number(pos.entry_mcap) - 1) * 100;
+      }
+
+      if (pnlPercent > -30) continue;
+
+      const sym = escapeHtml(pos.symbol || pos.mint.slice(0, 8));
+      console.log(`[NUCLEAR STOP] Force closing $${sym} at ${pnlPercent.toFixed(1)}% loss`);
+
+      const pnlSol = Number(pos.size_sol) * pnlPercent / 100;
+      let exitSig  = null;
+
+      // Attempt live sell with 25% slippage tolerance
+      if (pos.execution_mode === 'live') {
+        try {
+          const sell = await executeLiveSell(pos, 'NUCLEAR_STOP');
+          exitSig = sell?.signature || null;
+        } catch (err) {
+          console.log(`[NUCLEAR STOP] Live sell failed for $${sym}: ${err.message} — recording at last price`);
+        }
+      }
+
+      // Record closure in DB regardless of sell outcome
+      const changed = db.prepare(`
+        UPDATE dry_run_positions
+        SET status = 'closed', closed_at_ms = ?, exit_price = ?, exit_mcap = ?,
+            exit_reason = 'NUCLEAR_STOP', pnl_percent = ?, pnl_sol = ?, exit_signature = ?
+        WHERE id = ? AND status = 'open'
+      `).run(now(), exitPrice, exitMcap, pnlPercent, pnlSol, exitSig, pos.id).changes;
+
+      if (changed) {
+        await sendTelegram(
+          `🚨 <b>NUCLEAR STOP</b> — $${sym} force closed at <b>${pnlPercent.toFixed(1)}%</b>`
+        ).catch(() => {});
+      }
+    } catch (err) {
+      console.log(`[NUCLEAR STOP] Error checking ${pos.mint.slice(0, 8)}: ${err.message}`);
+    }
+  }
+}
 
 export async function startCharon() {
   // Nuclear Helius connectivity test — runs before anything can throw
@@ -57,26 +116,60 @@ export async function startCharon() {
   }
 
   initDb();
-  closeStuckPositions(30 * 60_000); // clear positions stuck open > 30min before accepting new signals
+  closeStuckPositions(30 * 60_000);
   seedRouteWeightOverrides();
   deduplicateLessons();
   initLiveExecution();
+
+  // ── PART 1: Start Express webhook HTTP server ──────────────────────────────
+  const { startHeliusListener } = await import('./webhook/heliusListener.js');
+  startHeliusListener();
+
+  // ── PART 2: Fetch mid-cap pool addresses from Birdeye ─────────────────────
+  const { fetchMidCapPools, startPoolRefreshInterval } = await import('./webhook/poolRegistry.js');
+  let poolAddresses = [];
+  try {
+    poolAddresses = await fetchMidCapPools();
+  } catch (err) {
+    console.log(`[pool] startup fetch failed: ${err.message}`);
+  }
+
+  // ── PART 3: Register webhook with Helius ───────────────────────────────────
+  const { registerWebhook } = await import('./webhook/registerWebhooks.js');
+  const { setWebhookId } = await import('./webhook/poolRegistry.js');
+  const webhookId = await registerWebhook(poolAddresses).catch(err => {
+    console.log(`[webhook] registration error: ${err.message}`);
+    return null;
+  });
+  if (webhookId) setWebhookId(webhookId);
+  startPoolRefreshInterval();
+
+  // ── PART 4: Attach signal handler ─────────────────────────────────────────
+  const { attachSignalHandler, setSignalCandidateHandler } = await import('./webhook/signalHandler.js');
+  setSignalCandidateHandler(processCandidateFromSignals);
+  attachSignalHandler();
+
+  // ── PART 5: Nuclear stop loop (independent — not in addInterval registry) ──
+  setInterval(() => {
+    nuclearStopCheck().catch(err => console.log(`[NUCLEAR STOP] loop error: ${err.message}`));
+  }, 60_000);
+
   setupTelegram();
   await probeTelegram();
 
   if (SIGNAL_SERVER_URL) {
-    // ── Server mode: fetch signals from signal server ──────────────────────
+    // ── Server mode: signal server polling (DISABLED — webhook mode active) ──
     const { fetchServerSignals, setCandidateHandler, setDegenHandler } = await import('./signals/serverClient.js');
 
     setCandidateHandler(processCandidateFromSignals);
     setDegenHandler(maybeProcessDegenCandidate);
 
     const alert = (msg) => sendTelegram(msg);
-    const trackServer = makeFailureTracker('server signals', alert);
     const trackDip = makeFailureTracker('dip monitor', alert);
 
-    await fetchServerSignals().catch(error => console.log(`[server] initial fetch failed: ${error.message}`));
-    addInterval(() => trackServer(() => fetchServerSignals()), SIGNAL_POLL_MS);
+    // addInterval(() => trackServer(() => fetchServerSignals()), SIGNAL_POLL_MS);
+    // [SIGNAL POLLER] Disabled — webhook mode active
+    console.log('[SIGNAL POLLER] Disabled — webhook mode active');
 
     // Price monitor for dip buy strategy
     const { monitorPriceAlerts, cleanupAlerts } = await import('./signals/priceMonitor.js');
@@ -84,8 +177,6 @@ export async function startCharon() {
     setAlertHandler(processCandidateFromSignals);
     addInterval(() => trackDip(() => monitorPriceAlerts()), 10_000);
     addInterval(() => cleanupAlerts(), 60 * 60 * 1000);
-
-    console.log(`[bot] ${APP_NAME} started (server mode: ${SIGNAL_SERVER_URL})`);
   } else {
     // ── Standalone mode: direct polling (legacy) ───────────────────────────
     const { fetchGraduatedCoins } = await import('./signals/graduated.js');
@@ -101,57 +192,57 @@ export async function startCharon() {
     addInterval(() => fetchGraduatedCoins().catch(error => console.log(`[graduated] ${error.message}`)), GRADUATED_POLL_MS);
     addInterval(() => fetchGmgnTrending().catch(error => console.log(`[trending] ${error.message}`)), TRENDING_POLL_MS);
     startWebsocket();
-
-    console.log(`[bot] ${APP_NAME} started (standalone mode)`);
   }
 
-  // PumpPortal real-time feed (both modes, optional)
+  // PumpPortal real-time feed (optional)
   if (PUMPPORTAL_ENABLED) {
     const { startPumpPortal, setCandidateHandler: setPumpHandler } = await import('./feeds/pumpportal.js');
     setPumpHandler(processCandidateFromSignals);
     startPumpPortal();
     console.log('[bot] PumpPortal feed enabled');
+  } else {
+    console.log('[PUMPORTAL] Disabled — avoiding small cap launches');
   }
 
-  // Smart money wallet polling (both modes)
-  console.log('[smart] importing smartmoney module...');
-  try {
-    const { pollSmartWallets, testSmartMoneyConnection, setCandidateHandler: setSmartHandler, getSmartWallets } = await import('./feeds/smartmoney.js');
-    console.log(`[smart] module loaded OK — testSmartMoneyConnection type: ${typeof testSmartMoneyConnection}`);
-    setSmartHandler(processCandidateFromSignals);
-    const smartWalletCount = getSmartWallets().filter(w => w.active && w.address).length;
-    console.log(`[smart] starting — polling ${smartWalletCount} wallet(s) every ${SMART_MONEY_POLL_MS / 1000}s`);
-    testSmartMoneyConnection().catch(err => console.log(`[smart] test error: ${err.message}`));
-    pollSmartWallets().catch(err => console.log(`[smart] initial poll error: ${err.message}`));
-    addInterval(() => pollSmartWallets().catch(err => console.log(`[smart] ${err.message}`)), SMART_MONEY_POLL_MS);
-  } catch (err) {
-    console.log(`[smart] FATAL import error: ${err.message}`);
+  // Smart money wallet polling (gated — disabled by default)
+  if (SMART_MONEY_ENABLED) {
+    console.log('[smart] importing smartmoney module...');
+    try {
+      const { pollSmartWallets, testSmartMoneyConnection, setCandidateHandler: setSmartHandler, getSmartWallets } = await import('./feeds/smartmoney.js');
+      setSmartHandler(processCandidateFromSignals);
+      const smartWalletCount = getSmartWallets().filter(w => w.active && w.address).length;
+      console.log(`[smart] starting — polling ${smartWalletCount} wallet(s) every ${SMART_MONEY_POLL_MS / 1000}s`);
+      testSmartMoneyConnection().catch(err => console.log(`[smart] test error: ${err.message}`));
+      pollSmartWallets().catch(err => console.log(`[smart] initial poll error: ${err.message}`));
+      addInterval(() => pollSmartWallets().catch(err => console.log(`[smart] ${err.message}`)), SMART_MONEY_POLL_MS);
+    } catch (err) {
+      console.log(`[smart] FATAL import error: ${err.message}`);
+    }
+  } else {
+    console.log('[SMART MONEY] Disabled permanently');
   }
 
-  // Position monitoring runs in both modes
+  // Position monitoring
   const trackPositions = makeFailureTracker('position monitor', (msg) => sendTelegram(msg));
   addInterval(() => trackPositions(() => monitorPositions()), POSITION_CHECK_MS);
 
-  // Hourly maintenance: memory health + guard, daily report, DB cleanup
+  // Hourly maintenance
   const hourlyMaintenance = async () => {
     const mem = process.memoryUsage();
     const heapMb = Math.round(mem.heapUsed / 1024 / 1024);
     const rssMb  = Math.round(mem.rss       / 1024 / 1024);
     console.log(`[health] Memory: heap=${heapMb}MB rss=${rssMb}MB`);
 
-    // Tier 1: high heap — run DB cleanup early to reclaim memory
     if (heapMb > 400) {
       console.log(`[health] Heap ${heapMb}MB > 400MB — forcing early cleanup`);
       try { runCleanup(); } catch (err) { console.log(`[cleanup] ${err.message}`); }
     }
 
-    // Tier 2: RSS critical — exit cleanly so Railway auto-restarts
     if (rssMb > 450) {
       console.log(`[health] RSS ${rssMb}MB > 450MB — exiting for clean restart`);
       shutdown('MEMGUARD');
     }
 
-    // Daily report
     const lastSent = numSetting('last_report_sent_ms', 0);
     const nextDue = lastSent + REPORT_INTERVAL_MS;
     if (Date.now() >= nextDue) {
@@ -163,21 +254,17 @@ export async function startCharon() {
       console.log(`[report] next report in ${h}h ${m}m`);
     }
 
-    // Daily DB cleanup
     if (isDueForCleanup()) {
       try { runCleanup(); } catch (err) { console.log(`[cleanup] error: ${err.message}`); }
     }
 
-    // Auto-tuner: emergency checks every hour
     await checkEmergencyConditions().catch(err => console.log(`[autotune] ${err.message}`));
 
-    // Auto-tuner: filter tune weekly
     const lastFilterTune = numSetting('last_filter_tune_ms', 0);
     if (Date.now() - lastFilterTune > 7 * 24 * 60 * 60 * 1000) {
       try { autoTuneFilters(); } catch (err) { console.log(`[autotune] filter tune: ${err.message}`); }
     }
 
-    // Auto-tuner: daily audit
     const lastDailyAudit = numSetting('last_daily_audit_ms', 0);
     if (Date.now() - lastDailyAudit > 24 * 60 * 60 * 1000) {
       await dailyAudit().catch(err => console.log(`[autotune] daily audit: ${err.message}`));
@@ -185,4 +272,7 @@ export async function startCharon() {
   };
   addInterval(() => hourlyMaintenance().catch(err => console.log(`[maintenance] ${err.message}`)), 60 * 60 * 1000);
   hourlyMaintenance().catch(() => {});
+
+  console.log(`[CHARON] Webhook mode active — mid-cap momentum build live`);
+  console.log(`[bot] ${APP_NAME} started`);
 }
