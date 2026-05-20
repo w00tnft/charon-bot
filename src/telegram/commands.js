@@ -85,7 +85,7 @@ export async function handleMessage(msg) {
       await sendDailyReport();
     } catch (err) {
       console.error('[report] crash:', err);
-      await sendTelegram('⚠️ Report failed: ' + err.message).catch(() => {});
+      await sendTelegram('⚠️ Report failed: ' + escapeHtml(err.message)).catch(() => {});
     }
     return;
   }
