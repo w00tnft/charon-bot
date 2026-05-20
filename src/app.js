@@ -1,5 +1,5 @@
 import { setDefaultResultOrder } from 'node:dns';
-import { APP_NAME, SIGNAL_SERVER_URL, SIGNAL_POLL_MS, GRADUATED_POLL_MS, TRENDING_POLL_MS, POSITION_CHECK_MS, REPORT_INTERVAL_MS, PUMPPORTAL_ENABLED, SMART_MONEY_POLL_MS, SMART_MONEY_ENABLED, validateConfig } from './config.js';
+import { APP_NAME, SIGNAL_SERVER_URL, SIGNAL_POLL_MS, GRADUATED_POLL_MS, TRENDING_POLL_MS, POSITION_CHECK_MS, REPORT_INTERVAL_MS, PUMPPORTAL_ENABLED, SMART_MONEY_POLL_MS, SMART_MONEY_ENABLED, ACCELERATED_DRY_RUN, POSITION_PRICE_CHECK_INTERVAL_MS, BACKTEST_AUTO_RUN, DEXSCREENER_TRENDING_POLL_MS, validateConfig } from './config.js';
 import { initDb } from './db/connection.js';
 import { db } from './db/connection.js';
 import { initLiveExecution } from './liveExecutor.js';
@@ -222,9 +222,43 @@ export async function startCharon() {
     console.log('[SMART MONEY] Disabled permanently');
   }
 
+  // ── PART 5b: Accelerated dry-run mode ──────────────────────────────────────
+  if (ACCELERATED_DRY_RUN) {
+    console.log('[accel] ACCELERATED_DRY_RUN=true — DexScreener trending every 10min, faster price checks');
+    const { fetchDexScreenerTrending } = await import('./data/tokenData.js');
+    addInterval(async () => {
+      try {
+        const mints = await fetchDexScreenerTrending();
+        console.log(`[accel] DexScreener trending: ${mints.length} token(s)`);
+        for (const mint of mints.slice(0, 20)) {
+          await processCandidateFromSignals({
+            mint,
+            route: 'webhook',
+            source: 'dexscreener_trending',
+            trendingToken: { address: mint, seenAt: Date.now() },
+          }).catch(err => console.log(`[accel] signal error for ${mint.slice(0, 8)}: ${err.message}`));
+        }
+      } catch (err) {
+        console.log(`[accel] trending poll error: ${err.message}`);
+      }
+    }, DEXSCREENER_TRENDING_POLL_MS);
+
+    if (BACKTEST_AUTO_RUN) {
+      const { runBacktest, formatBacktestReport } = await import('./backtest/engine.js');
+      console.log('[backtest] Auto-run enabled — launching in background...');
+      runBacktest({
+        onProgress: msg => console.log(`[backtest] ${msg}`),
+      }).then(results => {
+        const report = formatBacktestReport(results);
+        return sendTelegram(report);
+      }).catch(err => console.log(`[backtest] auto-run error: ${err.message}`));
+    }
+  }
+
   // Position monitoring
+  const posCheckMs = ACCELERATED_DRY_RUN ? POSITION_PRICE_CHECK_INTERVAL_MS : POSITION_CHECK_MS;
   const trackPositions = makeFailureTracker('position monitor', (msg) => sendTelegram(msg));
-  addInterval(() => trackPositions(() => monitorPositions()), POSITION_CHECK_MS);
+  addInterval(() => trackPositions(() => monitorPositions()), posCheckMs);
 
   // Hourly maintenance
   const hourlyMaintenance = async () => {
@@ -273,6 +307,6 @@ export async function startCharon() {
   addInterval(() => hourlyMaintenance().catch(err => console.log(`[maintenance] ${err.message}`)), 60 * 60 * 1000);
   hourlyMaintenance().catch(() => {});
 
-  console.log(`[CHARON] Webhook mode active — mid-cap momentum build live`);
+  console.log(`[CHARON] Webhook mode active — mid-cap momentum build live${ACCELERATED_DRY_RUN ? ' (ACCELERATED)' : ''}`);
   console.log(`[bot] ${APP_NAME} started`);
 }

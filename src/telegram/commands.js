@@ -231,6 +231,204 @@ export async function handleMessage(msg) {
       { parse_mode: 'HTML' }
     );
   }
+  if (text.startsWith('/backtest')) {
+    await bot.sendMessage(chatId, '🔬 <b>Starting backtest...</b>\nThis may take 2–5 minutes.', { parse_mode: 'HTML' });
+    try {
+      const { runBacktest, formatBacktestReport } = await import('../backtest/engine.js');
+      const results = await runBacktest({
+        onProgress: async (msg) => {
+          await bot.sendMessage(chatId, `⏳ ${msg}`).catch(() => {});
+        },
+      });
+      const report = formatBacktestReport(results);
+      await bot.sendMessage(chatId, report, { parse_mode: 'HTML' });
+    } catch (err) {
+      console.error('[backtest] error:', err);
+      await bot.sendMessage(chatId, `⚠️ Backtest failed: ${escapeHtml(err.message)}`, { parse_mode: 'HTML' });
+    }
+    return;
+  }
+  if (text.startsWith('/drystat')) {
+    const isAccel = process.env.ACCELERATED_DRY_RUN === 'true';
+    const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+    const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
+    const statsAll = db.prepare(`
+      SELECT COUNT(*) AS total,
+        SUM(CASE WHEN exit_class = 'win' THEN 1 ELSE 0 END) AS wins,
+        SUM(CASE WHEN exit_class = 'loss' THEN 1 ELSE 0 END) AS losses,
+        SUM(CASE WHEN exit_class = 'neutral' THEN 1 ELSE 0 END) AS neutrals,
+        ROUND(AVG(pnl_percent), 2) AS avg_pnl,
+        COALESCE(SUM(pnl_sol), 0) AS total_pnl_sol
+      FROM dry_run_positions WHERE status = 'closed' AND source != 'backtest'
+    `).get();
+
+    const stats24h = db.prepare(`
+      SELECT COUNT(*) AS total,
+        SUM(CASE WHEN exit_class = 'win' THEN 1 ELSE 0 END) AS wins,
+        ROUND(AVG(pnl_percent), 2) AS avg_pnl
+      FROM dry_run_positions WHERE status = 'closed' AND closed_at_ms > ? AND source != 'backtest'
+    `).get(dayAgo);
+
+    const statsWeek = db.prepare(`
+      SELECT COUNT(*) AS total,
+        SUM(CASE WHEN exit_class = 'win' THEN 1 ELSE 0 END) AS wins
+      FROM dry_run_positions WHERE status = 'closed' AND closed_at_ms > ? AND source != 'backtest'
+    `).get(weekAgo);
+
+    const totalTrades = statsAll?.total || 0;
+    const winRate = totalTrades > 0 ? Math.round((statsAll.wins / totalTrades) * 100) : null;
+    const dailyTrades = stats24h?.total || 0;
+    const daysTo50 = dailyTrades > 0 ? Math.ceil((50 - totalTrades) / dailyTrades) : null;
+    const wr24h = stats24h?.total > 0 ? Math.round((stats24h.wins / stats24h.total) * 100) : null;
+    const wrWeek = statsWeek?.total > 0 ? Math.round((statsWeek.wins / statsWeek.total) * 100) : null;
+
+    const routeBreakdown = db.prepare(`
+      SELECT signal_route, COUNT(*) AS c,
+        SUM(CASE WHEN exit_class = 'win' THEN 1 ELSE 0 END) AS w,
+        ROUND(AVG(pnl_percent), 1) AS avg_pnl
+      FROM dry_run_positions
+      WHERE status = 'closed' AND source != 'backtest' AND signal_route IS NOT NULL
+      GROUP BY signal_route ORDER BY c DESC LIMIT 5
+    `).all();
+
+    const routeLines = routeBreakdown.map(r => {
+      const wr = r.c > 0 ? Math.round(r.w / r.c * 100) : 0;
+      return `▸ ${escapeHtml(r.signal_route)}: ${r.c} trades | ${wr}% win | ${r.avg_pnl > 0 ? '+' : ''}${r.avg_pnl}% avg`;
+    });
+
+    const lines = [
+      '📊 <b>DRY-RUN STATS</b>',
+      `🚀 Mode: <b>${isAccel ? 'ACCELERATED' : 'Normal'}</b>`,
+      '━━━━━━━━━━━━━━━━',
+      '',
+      '📈 <b>ALL-TIME</b>',
+      `▸ Total trades: <b>${totalTrades}</b>`,
+      `▸ Win rate: <b>${winRate != null ? winRate + '%' : '—'}</b> (target: 48%)`,
+      `▸ W/L/N: <b>${statsAll?.wins || 0}</b>/${statsAll?.losses || 0}/${statsAll?.neutrals || 0}`,
+      `▸ Avg PnL: <b>${statsAll?.avg_pnl != null ? (statsAll.avg_pnl > 0 ? '+' : '') + statsAll.avg_pnl + '%' : '—'}</b>`,
+      `▸ Total PnL: <b>${Number(statsAll?.total_pnl_sol || 0) >= 0 ? '+' : ''}${Number(statsAll?.total_pnl_sol || 0).toFixed(4)} SOL</b>`,
+      '',
+      '🕐 <b>LAST 24H</b>',
+      `▸ Trades: <b>${stats24h?.total || 0}</b>`,
+      `▸ Win rate: <b>${wr24h != null ? wr24h + '%' : '—'}</b>`,
+      `▸ Avg PnL: <b>${stats24h?.avg_pnl != null ? (stats24h.avg_pnl > 0 ? '+' : '') + stats24h.avg_pnl + '%' : '—'}</b>`,
+      '',
+      '📅 <b>LAST 7 DAYS</b>',
+      `▸ Trades: <b>${statsWeek?.total || 0}</b>`,
+      `▸ Win rate: <b>${wrWeek != null ? wrWeek + '%' : '—'}</b>`,
+      '',
+      routeBreakdown.length > 0 ? '🛣️ <b>BY SIGNAL ROUTE</b>' : '',
+      ...routeLines,
+      '',
+      daysTo50 != null && totalTrades < 50
+        ? `⏰ Est. days to 50 trades: <b>~${daysTo50}d</b> (${dailyTrades}/day)`
+        : totalTrades >= 50 ? '✅ 50-trade threshold reached' : '⏰ Not enough daily data yet',
+    ].filter(l => l !== '').join('\n');
+
+    return bot.sendMessage(chatId, lines, { parse_mode: 'HTML' });
+  }
+  if (text.startsWith('/filterstat')) {
+    const { getFilterStats } = await import('../filters/candidateFilter.js');
+    const stats = getFilterStats();
+
+    const top = (reasons, n = 3) =>
+      Object.entries(reasons)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, n)
+        .map(([r, c]) => `  · ${escapeHtml(r)}: ${c}`)
+        .join('\n') || '  (none)';
+
+    const total = stats.total || 0;
+    const lines = [
+      '🔍 <b>FILTER STATS</b>',
+      `Total evaluated: <b>${total}</b>`,
+      '',
+      '🟡 <b>Layer 1</b> (liquidity/age/auth/mcap)',
+      `▸ Passed: <b>${stats.layer1Pass}</b> | Failed: <b>${stats.layer1Fail}</b>`,
+      top(stats.layer1Reasons),
+      '',
+      '🟠 <b>Layer 2</b> (momentum/holders/vol)',
+      `▸ Passed: <b>${stats.layer2Pass}</b> | Failed: <b>${stats.layer2Fail}</b>`,
+      top(stats.layer2Reasons),
+      '',
+      '🔴 <b>Layer 3</b> (Jupiter routing)',
+      `▸ Passed: <b>${stats.layer3Pass}</b> | Failed: <b>${stats.layer3Fail}</b>`,
+      top(stats.layer3Reasons),
+      '',
+      `✅ Final pass rate: <b>${total > 0 ? Math.round(stats.layer3Pass / total * 100) : 0}%</b>`,
+      '<i>Stats reset on bot restart</i>',
+    ].join('\n');
+
+    return bot.sendMessage(chatId, lines, { parse_mode: 'HTML' });
+  }
+  if (text.startsWith('/golivewhen')) {
+    const REQUIRED_WIN_RATE = 48;
+    const REQUIRED_TRADES = 50;
+
+    const stats = db.prepare(`
+      SELECT COUNT(*) AS total,
+        SUM(CASE WHEN exit_class = 'win' THEN 1 ELSE 0 END) AS wins,
+        ROUND(AVG(pnl_percent), 2) AS avg_pnl,
+        COALESCE(SUM(pnl_sol), 0) AS total_pnl
+      FROM dry_run_positions WHERE status = 'closed' AND source != 'backtest'
+    `).get();
+
+    const recentStats = db.prepare(`
+      SELECT COUNT(*) AS total,
+        SUM(CASE WHEN exit_class = 'win' THEN 1 ELSE 0 END) AS wins
+      FROM (SELECT exit_class FROM dry_run_positions
+        WHERE status = 'closed' AND source != 'backtest'
+        ORDER BY closed_at_ms DESC LIMIT 20)
+    `).get();
+
+    const weeklyRate = db.prepare(`
+      SELECT COUNT(*) AS total
+      FROM dry_run_positions
+      WHERE status = 'closed' AND source != 'backtest'
+        AND closed_at_ms > ?
+    `).get(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+    const total = stats?.total || 0;
+    const winRate = total > 0 ? Math.round((stats.wins / total) * 100) : null;
+    const recent20Wr = recentStats?.total >= 20
+      ? Math.round((recentStats.wins / recentStats.total) * 100) : null;
+    const tradesNeeded = Math.max(0, REQUIRED_TRADES - total);
+    const weeklyTrades = weeklyRate?.total || 0;
+    const daysToTarget = weeklyTrades > 0 ? Math.ceil(tradesNeeded / (weeklyTrades / 7)) : null;
+
+    const winRateOk = winRate !== null && winRate >= REQUIRED_WIN_RATE;
+    const tradesOk = total >= REQUIRED_TRADES;
+    const recentOk = recent20Wr !== null && recent20Wr >= REQUIRED_WIN_RATE;
+
+    const status = winRateOk && tradesOk && recentOk
+      ? '✅ <b>READY TO GO LIVE</b>'
+      : '⏳ <b>NOT READY YET</b>';
+
+    const lines = [
+      '🎯 <b>GO LIVE CHECKLIST</b>',
+      status,
+      '━━━━━━━━━━━━━━━━',
+      '',
+      `${tradesOk ? '✅' : '❌'} Trades: <b>${total}/${REQUIRED_TRADES}</b>${tradesNeeded > 0 ? ` (need ${tradesNeeded} more)` : ''}`,
+      `${winRateOk ? '✅' : '❌'} Win rate: <b>${winRate != null ? winRate + '%' : '—'}/${REQUIRED_WIN_RATE}%</b>`,
+      `${recentOk ? '✅' : '❌'} Recent 20: <b>${recent20Wr != null ? recent20Wr + '%' : '—'}/${REQUIRED_WIN_RATE}%</b>`,
+      '',
+      '📊 <b>TREND</b>',
+      `▸ Avg PnL: <b>${stats?.avg_pnl != null ? (stats.avg_pnl > 0 ? '+' : '') + stats.avg_pnl + '%' : '—'}</b>`,
+      `▸ Total PnL: <b>${Number(stats?.total_pnl || 0) >= 0 ? '+' : ''}${Number(stats?.total_pnl || 0).toFixed(4)} SOL</b>`,
+      `▸ Weekly trade rate: <b>${weeklyTrades} trades/week</b>`,
+      daysToTarget != null && tradesNeeded > 0
+        ? `▸ Est. time to 50 trades: <b>~${daysToTarget} days</b>`
+        : tradesNeeded === 0 ? '▸ Trade count achieved ✅' : '▸ Not enough data for estimate',
+      '',
+      winRateOk && tradesOk && recentOk
+        ? '🚀 All criteria met — consider going live!'
+        : '💡 Keep accumulating dry-run trades. Use /drystat for details.',
+    ].join('\n');
+
+    return bot.sendMessage(chatId, lines, { parse_mode: 'HTML' });
+  }
   if (text.startsWith('/clearpositions')) {
     const { closeStuckPositions } = await import('../db/positions.js');
     const cleared = closeStuckPositions(0); // 0ms = close ALL open dry_run positions

@@ -48,6 +48,12 @@ export const WEBHOOK_PUBLIC_URL = process.env.WEBHOOK_PUBLIC_URL || '';
 export const MIN_WEBHOOK_SOL_THRESHOLD = Number(process.env.MIN_WEBHOOK_SOL_THRESHOLD || 2);
 export const POOL_REFRESH_INTERVAL_MS = Number(process.env.POOL_REFRESH_INTERVAL_MS || 1_800_000);
 export const BIRDEYE_API_KEY = process.env.BIRDEYE_API_KEY || '';
+export const ACCELERATED_DRY_RUN = process.env.ACCELERATED_DRY_RUN === 'true';
+export const POSITION_PRICE_CHECK_INTERVAL_MS = Number(process.env.POSITION_PRICE_CHECK_INTERVAL_MS || 8_000);
+export const BACKTEST_LOOKBACK_HOURS = Number(process.env.BACKTEST_LOOKBACK_HOURS || 72);
+export const BACKTEST_MAX_CANDIDATES = Number(process.env.BACKTEST_MAX_CANDIDATES || 300);
+export const BACKTEST_AUTO_RUN = process.env.BACKTEST_AUTO_RUN === 'true';
+export const DEXSCREENER_TRENDING_POLL_MS = Number(process.env.DEXSCREENER_TRENDING_POLL_MS || 10 * 60_000);
 
 export const JSON_HEADERS = {
   Accept: 'application/json, text/plain, */*',
