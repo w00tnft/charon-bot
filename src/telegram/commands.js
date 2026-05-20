@@ -33,6 +33,17 @@ import { runLearning, sendLessons } from '../learning/commands.js';
 import { autoStatusText } from '../learning/autotuner.js';
 import { addSmartWallet, removeSmartWallet, getSmartWallets, smartWalletStats } from '../feeds/smartmoney.js';
 
+// Returns the pivot timestamp in ms (from PIVOT_DATE env var), or null if not set.
+// PIVOT_DATE can be an ISO string ("2026-05-20T14:30:00Z") or a Unix ms number.
+function pivotMs() {
+  const raw = process.env.PIVOT_DATE;
+  if (!raw) return null;
+  const n = Number(raw);
+  if (!isNaN(n) && n > 0) return n;
+  const d = new Date(raw);
+  return isNaN(d.getTime()) ? null : d.getTime();
+}
+
 export async function handleMessage(msg) {
   const text = (msg.text || '').trim();
   const chatId = msg.chat.id;
@@ -252,6 +263,7 @@ export async function handleMessage(msg) {
     const isAccel = process.env.ACCELERATED_DRY_RUN === 'true';
     const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
     const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const pivot = pivotMs();
 
     const statsAll = db.prepare(`
       SELECT COUNT(*) AS total,
@@ -276,6 +288,16 @@ export async function handleMessage(msg) {
       FROM dry_run_positions WHERE status = 'closed' AND closed_at_ms > ? AND source != 'backtest'
     `).get(weekAgo);
 
+    const statsPivot = pivot ? db.prepare(`
+      SELECT COUNT(*) AS total,
+        SUM(CASE WHEN exit_class = 'win' THEN 1 ELSE 0 END) AS wins,
+        SUM(CASE WHEN exit_class = 'loss' THEN 1 ELSE 0 END) AS losses,
+        SUM(CASE WHEN exit_class = 'neutral' THEN 1 ELSE 0 END) AS neutrals,
+        ROUND(AVG(pnl_percent), 2) AS avg_pnl,
+        COALESCE(SUM(pnl_sol), 0) AS total_pnl_sol
+      FROM dry_run_positions WHERE status = 'closed' AND source != 'backtest' AND closed_at_ms > ?
+    `).get(pivot) : null;
+
     const totalTrades = statsAll?.total || 0;
     const winRate = totalTrades > 0 ? Math.round((statsAll.wins / totalTrades) * 100) : null;
     const dailyTrades = stats24h?.total || 0;
@@ -297,22 +319,36 @@ export async function handleMessage(msg) {
       return `▸ ${escapeHtml(r.signal_route)}: ${r.c} trades | ${wr}% win | ${r.avg_pnl > 0 ? '+' : ''}${r.avg_pnl}% avg`;
     });
 
+    const pFmt = (n) => n != null ? (n > 0 ? '+' : '') + n + '%' : '—';
+    const solFmt = (n) => (Number(n) >= 0 ? '+' : '') + Number(n || 0).toFixed(4);
+
+    const pivotSection = statsPivot ? [
+      '',
+      `🔄 <b>SINCE PIVOT</b> (post mid-cap, ${new Date(pivot).toISOString().slice(0, 10)})`,
+      `▸ Trades: <b>${statsPivot.total || 0}</b>`,
+      `▸ Win rate: <b>${statsPivot.total > 0 ? Math.round(statsPivot.wins / statsPivot.total * 100) + '%' : '—'}</b> (target: 48%)`,
+      `▸ W/L/N: <b>${statsPivot.wins || 0}</b>/${statsPivot.losses || 0}/${statsPivot.neutrals || 0}`,
+      `▸ Avg PnL: <b>${pFmt(statsPivot.avg_pnl)}</b>`,
+      `▸ Total PnL: <b>${solFmt(statsPivot.total_pnl_sol)} SOL</b>`,
+    ] : [];
+
     const lines = [
       '📊 <b>DRY-RUN STATS</b>',
       `🚀 Mode: <b>${isAccel ? 'ACCELERATED' : 'Normal'}</b>`,
       '━━━━━━━━━━━━━━━━',
       '',
       '📈 <b>ALL-TIME</b>',
-      `▸ Total trades: <b>${totalTrades}</b>`,
+      `▸ Trades: <b>${totalTrades}</b>`,
       `▸ Win rate: <b>${winRate != null ? winRate + '%' : '—'}</b> (target: 48%)`,
       `▸ W/L/N: <b>${statsAll?.wins || 0}</b>/${statsAll?.losses || 0}/${statsAll?.neutrals || 0}`,
-      `▸ Avg PnL: <b>${statsAll?.avg_pnl != null ? (statsAll.avg_pnl > 0 ? '+' : '') + statsAll.avg_pnl + '%' : '—'}</b>`,
-      `▸ Total PnL: <b>${Number(statsAll?.total_pnl_sol || 0) >= 0 ? '+' : ''}${Number(statsAll?.total_pnl_sol || 0).toFixed(4)} SOL</b>`,
+      `▸ Avg PnL: <b>${pFmt(statsAll?.avg_pnl)}</b>`,
+      `▸ Total PnL: <b>${solFmt(statsAll?.total_pnl_sol)} SOL</b>`,
+      ...pivotSection,
       '',
       '🕐 <b>LAST 24H</b>',
       `▸ Trades: <b>${stats24h?.total || 0}</b>`,
       `▸ Win rate: <b>${wr24h != null ? wr24h + '%' : '—'}</b>`,
-      `▸ Avg PnL: <b>${stats24h?.avg_pnl != null ? (stats24h.avg_pnl > 0 ? '+' : '') + stats24h.avg_pnl + '%' : '—'}</b>`,
+      `▸ Avg PnL: <b>${pFmt(stats24h?.avg_pnl)}</b>`,
       '',
       '📅 <b>LAST 7 DAYS</b>',
       `▸ Trades: <b>${statsWeek?.total || 0}</b>`,
@@ -699,20 +735,27 @@ export async function sendSummary(chatId) {
 }
 
 export async function sendPnl(chatId, query = null) {
-  const closed = db.prepare("SELECT pnl_percent, pnl_sol, exit_class, snapshot_json FROM dry_run_positions WHERE status = 'closed'").all();
+  const pivot = pivotMs();
+  const closed = db.prepare("SELECT pnl_percent, pnl_sol, exit_class, snapshot_json, closed_at_ms FROM dry_run_positions WHERE status = 'closed'").all();
   if (!closed.length) {
     const text = '📊 <b>PnL</b>\n\nNo closed positions yet.';
     return query ? editMenuMessage(query, text, navKeyboard()) : bot.sendMessage(chatId, text, { parse_mode: 'HTML' });
   }
 
-  const totalPnlSol = closed.reduce((s, p) => s + Number(p.pnl_sol || 0), 0);
-  const pnlWins = closed.filter(p => (p.exit_class || (Number(p.pnl_percent || 0) > 0 ? 'win' : 'loss')) === 'win');
-  const pnlNeutrals = closed.filter(p => p.exit_class === 'neutral');
-  const pnlLosses = closed.filter(p => (p.exit_class || (Number(p.pnl_percent || 0) > 0 ? 'win' : 'loss')) === 'loss');
-  const netScore = pnlWins.length - pnlLosses.length;
-  const netIcon = netScore > 0 ? '✅' : netScore < 0 ? '⚠️' : '➡️';
-  const total = closed.length;
-  const pct = n => `${Math.round(n / total * 100)}%`;
+  function calcStats(positions) {
+    const wins     = positions.filter(p => (p.exit_class || (Number(p.pnl_percent || 0) > 0 ? 'win' : 'loss')) === 'win');
+    const neutrals = positions.filter(p => p.exit_class === 'neutral');
+    const losses   = positions.filter(p => (p.exit_class || (Number(p.pnl_percent || 0) > 0 ? 'win' : 'loss')) === 'loss');
+    const total    = positions.length;
+    const totalSol = positions.reduce((s, p) => s + Number(p.pnl_sol || 0), 0);
+    const avgPnl   = total > 0 ? positions.reduce((s, p) => s + Number(p.pnl_percent || 0), 0) / total : null;
+    const winRate  = total > 0 ? Math.round(wins.length / total * 100) : null;
+    const net      = wins.length - losses.length;
+    return { wins, neutrals, losses, total, totalSol, avgPnl, winRate, net };
+  }
+
+  const allStats   = calcStats(closed);
+  const pivotStats = pivot ? calcStats(closed.filter(p => Number(p.closed_at_ms || 0) > pivot)) : null;
 
   const byRoute = new Map();
   for (const pos of closed) {
@@ -731,13 +774,26 @@ export async function sendPnl(chatId, query = null) {
     .sort((a, b) => b.pnlSum - a.pnlSum)
     .map(r => `• ${escapeHtml(r.route)}: ${r.wins}W/${r.neutrals}N/${r.count - r.wins - r.neutrals}L · avg ${fmtPct(r.pnlSum / r.count)}`);
 
+  const { wins, neutrals, losses, total, totalSol, avgPnl, winRate, net } = allStats;
+  const netIcon = net > 0 ? '✅' : net < 0 ? '⚠️' : '➡️';
+  const pct = n => `${Math.round(n / total * 100)}%`;
+
+  const pivotSection = pivotStats ? [
+    '',
+    `🔄 <b>SINCE PIVOT</b> (post mid-cap, ${new Date(pivot).toISOString().slice(0, 10)})`,
+    `Trades: <b>${pivotStats.total}</b> | Win rate: <b>${pivotStats.winRate != null ? pivotStats.winRate + '%' : '—'}</b> | Avg PnL: <b>${pivotStats.avgPnl != null ? (pivotStats.avgPnl > 0 ? '+' : '') + pivotStats.avgPnl.toFixed(1) + '%' : '—'}</b>`,
+    `✅ <b>${pivotStats.wins.length}</b> · ⚖️ <b>${pivotStats.neutrals.length}</b> · ❌ <b>${pivotStats.losses.length}</b> · Net: <b>${pivotStats.net > 0 ? '+' : ''}${pivotStats.net}</b>`,
+    `Total SOL: <b>${pivotStats.totalSol >= 0 ? '+' : ''}${fmtSol(pivotStats.totalSol)} SOL</b>`,
+  ] : [];
+
   const lines = [
     '📊 <b>PnL</b>',
     '',
-    `Total SOL: <b>${fmtSol(totalPnlSol)} SOL</b>`,
-    `Trades: <b>${total}</b>`,
-    `✅ Wins: <b>${pnlWins.length}</b> (${pct(pnlWins.length)}) · ⚖️ Neutral: <b>${pnlNeutrals.length}</b> (${pct(pnlNeutrals.length)}) · ❌ Losses: <b>${pnlLosses.length}</b> (${pct(pnlLosses.length)})`,
-    `Net score: <b>${netScore > 0 ? '+' : ''}${netScore}</b> ${netIcon}`,
+    '<b>ALL TIME</b>',
+    `Trades: <b>${total}</b> | Win rate: <b>${winRate != null ? winRate + '%' : '—'}</b> | Avg PnL: <b>${avgPnl != null ? (avgPnl > 0 ? '+' : '') + avgPnl.toFixed(1) + '%' : '—'}</b>`,
+    `✅ Wins: <b>${wins.length}</b> (${pct(wins.length)}) · ⚖️ Neutral: <b>${neutrals.length}</b> (${pct(neutrals.length)}) · ❌ Losses: <b>${losses.length}</b> (${pct(losses.length)})`,
+    `Net score: <b>${net > 0 ? '+' : ''}${net}</b> ${netIcon} | Total SOL: <b>${fmtSol(totalSol)} SOL</b>`,
+    ...pivotSection,
     '',
     '<b>By route:</b>',
     ...routeLines,
