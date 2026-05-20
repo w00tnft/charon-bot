@@ -5,13 +5,16 @@ const LESSON_OVERRIDES = {
   fee_graduated_trending: 0.3,   // avoid — -3.8% avg PnL
   fee_trending:           1.2,   // +6.2% avg PnL — boosted
   fee_graduated:          1.1,   // reliable dual-source
-  graduated_trending:     0.1,   // -1.1% avg PnL — disabled
+  // reset for mid-cap pivot — 2026-05-20
+  graduated_trending:     1.0,   // was 0.1x (small-cap lesson, not applicable)
   fee_claim:              1.0,
   graduated:              1.0,
   trending:               1.0,
-  single_source:          1.0,
+  // reset for mid-cap pivot — 2026-05-20
+  single_source:          1.0,   // neutral reset
   dual_source:            1.1,   // +0.8% avg PnL — slight boost
-  pumpportal_survivor:    1.3,   // +7.7% avg PnL — best route
+  // reset for mid-cap pivot — 2026-05-20
+  pumpportal_survivor:    1.0,   // was 1.3x — PumpPortal disabled, data irrelevant
   webhook:                1.2,   // Helius real-time signals — slight boost
 };
 
