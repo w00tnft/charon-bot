@@ -12,12 +12,14 @@ const LESSON_OVERRIDES = {
   single_source:          1.0,
   dual_source:            1.1,   // +0.8% avg PnL — slight boost
   pumpportal_survivor:    1.3,   // +7.7% avg PnL — best route
+  webhook:                1.2,   // Helius real-time signals — slight boost
 };
 
 export function toCanonicalRoute(route) {
   if (!route) return 'single_source';
   const r = String(route).toLowerCase();
   if (r.includes('pumpportal')) return 'pumpportal_survivor';
+  if (r.includes('webhook') || r.includes('helius')) return 'webhook';
   const hasFee = r.includes('fee');
   const hasGraduated = r.includes('graduated');
   const hasTrending = r.includes('trending');
