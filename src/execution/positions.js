@@ -360,12 +360,13 @@ const ABSOLUTE_MAX_HOLD_MS = 25 * 60_000; // 25 min — hard ceiling for all dry
 async function maybeAutoLearn() {
   const { count: total } = db.prepare("SELECT COUNT(*) AS count FROM dry_run_positions WHERE status = 'closed'").get();
   if (total === 0) return;
-  const milestone = Math.floor(total / 25) * 25;
+  const batchSize = process.env.ACCELERATED_DRY_RUN === 'true' ? 10 : 25;
+  const milestone = Math.floor(total / batchSize) * batchSize;
   if (milestone === 0) return;
   const last = numSetting('last_auto_learn_count', 0);
   if (milestone <= last) return;
   setSetting('last_auto_learn_count', milestone);
-  console.log(`[learning] auto-triggered at ${total} closed positions`);
+  console.log(`[learning] auto-triggered at ${total} closed positions (batch: ${batchSize})`);
   await autoRunLearning(milestone);
 }
 
