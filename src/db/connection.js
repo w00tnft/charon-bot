@@ -525,6 +525,38 @@ export function initDb() {
   // Log agent gate settings so misconfigurations are visible at startup
   const agentEnabled = db.prepare("SELECT value FROM settings WHERE key = 'agent_enabled'").get()?.value ?? 'true (default)';
   console.log(`[config] agent_enabled: ${agentEnabled}`);
+
+  // ── DRY_RUN_STARTING_BALANCE — seed starting capital from env if provided ──
+  if (process.env.DRY_RUN_STARTING_BALANCE) {
+    const bal = Number(process.env.DRY_RUN_STARTING_BALANCE);
+    if (Number.isFinite(bal) && bal > 0) {
+      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('starting_capital_sol', ?)").run(String(bal));
+      console.log(`[config] starting_capital_sol set to ${bal} SOL (from DRY_RUN_STARTING_BALANCE)`);
+    }
+  }
+
+  // ── PIVOT_CLEAN migration — runs once when PIVOT_CLEAN=true ─────────────
+  // Protected by a DB flag so it never re-runs even if the env var stays set.
+  if (process.env.PIVOT_CLEAN === 'true') {
+    const alreadyDone = db.prepare("SELECT value FROM settings WHERE key = 'pivot_clean_done'").get();
+    if (alreadyDone) {
+      console.log('[pivot] PIVOT_CLEAN=true but migration already ran — skipping');
+    } else {
+      console.log('[pivot] PIVOT_CLEAN=true — clearing trade history for mid-cap pivot...');
+      db.transaction(() => {
+        db.prepare('DELETE FROM dry_run_positions').run();
+        db.prepare('DELETE FROM dry_run_trades').run();
+        db.prepare('DELETE FROM capital_snapshots').run();
+        db.prepare('DELETE FROM tp_sl_rules').run();
+        db.prepare("UPDATE route_weights SET win_count = 0, loss_count = 0, avg_pnl_pct = 0, updated_at_ms = ?").run(Date.now());
+        db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('last_auto_learn_count', '0')").run();
+        db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('pivot_clean_done', '1')").run();
+      })();
+      console.log('[pivot] Trade history cleared for mid-cap pivot');
+      console.log('[pivot] Blacklist preserved');
+      console.log('[pivot] Set PIVOT_CLEAN=false in Railway to prevent re-running');
+    }
+  }
 }
 
 export function ensureColumn(table, column, ddl) {
