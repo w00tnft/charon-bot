@@ -6,7 +6,10 @@ const HELIUS_BASE = 'https://api.helius.xyz/v0';
 export async function registerWebhook(poolAddresses) {
   const webhookUrl = process.env.WEBHOOK_PUBLIC_URL;
   if (!webhookUrl) {
-    console.log('[webhook] WEBHOOK_PUBLIC_URL not set — skipping Helius registration');
+    console.log('[webhook] WEBHOOK_PUBLIC_URL not set');
+    console.log('[webhook] Running in POLL-ONLY mode');
+    console.log('[webhook] Set WEBHOOK_PUBLIC_URL in Railway');
+    console.log('[webhook] to enable real-time Helius signals');
     return null;
   }
   if (!HELIUS_API_KEY) {

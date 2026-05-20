@@ -149,10 +149,11 @@ export async function checkEmergencyConditions() {
       if (bigLoss) {
         const ageMins = Math.round((ts - bigLoss.opened_at_ms) / 60000);
         const sym = escapeHtml(bigLoss.symbol || bigLoss.mint.slice(0, 8));
+        const pnlStr = escapeHtml(Number(bigLoss.pnl_percent).toFixed(1));
         await sendTelegram(
           `🚨 <b>LARGE LOSS ALERT</b>\n\n` +
           `▸ Token: <b>$${sym}</b>\n` +
-          `▸ PnL: <b>${Number(bigLoss.pnl_percent).toFixed(1)}%</b>\n` +
+          `▸ PnL: <b>${pnlStr}%</b>\n` +
           `▸ Age: <b>${ageMins}min</b>\n` +
           `▸ Emergency stop should fire soon!`
         );
@@ -176,7 +177,7 @@ export async function checkEmergencyConditions() {
         const pct = Math.round(recent.wins / recent.total * 100);
         await sendTelegram(
           `⚠️ <b>WIN RATE ALERT</b>\n\n` +
-          `▸ Last 20 trades: <b>${recent.wins} wins (${pct}%)</b>\n` +
+          `▸ Last 20 trades: <b>${escapeHtml(String(recent.wins))} wins (${escapeHtml(String(pct))}%)</b>\n` +
           `▸ Normal range: 30–45%\n` +
           `▸ Consider manual review`
         );
@@ -198,9 +199,9 @@ export async function checkEmergencyConditions() {
         const maxK = Math.round((cfg.max_mcap_usd || 0) / 1000);
         await sendTelegram(
           `⚠️ <b>NO SIGNALS ALERT</b>\n\n` +
-          `▸ No positions opened for <b>${Math.round(silenceMs / 60000)}min</b>\n` +
+          `▸ No positions opened for <b>${escapeHtml(String(Math.round(silenceMs / 60000)))}min</b>\n` +
           `▸ Market may be slow or filters too strict\n` +
-          `▸ Current mcap range: $${minK}k–$${maxK}k`
+          `▸ Current mcap range: $${escapeHtml(String(minK))}k–$${escapeHtml(String(maxK))}k`
         );
         setSetting('last_dead_bot_alert_ms', String(ts));
       }
@@ -251,7 +252,7 @@ export async function dailyAudit() {
       const total = (r.win_count || 0) + (r.loss_count || 0);
       const wr = total > 0 ? Math.round((r.win_count || 0) / total * 100) : 0;
       const wt = Number(r.weight);
-      const tag = wt <= 0.15 ? 'DISABLED' : `${wt.toFixed(2)}x`;
+      const tag = escapeHtml(wt <= 0.15 ? 'DISABLED' : `${wt.toFixed(2)}x`);
       const icon = wt <= 0.15 ? '❌' : wt >= 1.3 ? '🔥' : wt >= 1.0 ? '✅' : '⚠️';
       return `${icon} ${escapeHtml(r.route)}: ${tag} (${wr}% win, ${total} trades)`;
     });
@@ -264,27 +265,27 @@ export async function dailyAudit() {
 
     const lines = [
       '🔍 <b>CHARON DAILY AUDIT</b>',
-      `📅 ${new Date().toUTCString().slice(0, 16)}`,
+      `📅 ${escapeHtml(new Date().toUTCString().slice(0, 16))}`,
       '━━━━━━━━━━━━━━━━',
       '',
       '💰 <b>CAPITAL</b>',
-      `▸ Balance: <b>${fmtSol(capital)} SOL</b>`,
-      `▸ 24h change: <b>${capitalChange >= 0 ? '+' : ''}${fmtSol(capitalChange)} SOL</b>`,
+      `▸ Balance: <b>${escapeHtml(fmtSol(capital))} SOL</b>`,
+      `▸ 24h change: <b>${capitalChange >= 0 ? '+' : ''}${escapeHtml(fmtSol(capitalChange))} SOL</b>`,
       '',
       '📊 <b>PERFORMANCE (24h)</b>',
       `▸ Trades: <b>${stats24h?.total ?? 0}</b>`,
-      `▸ Win rate: <b>${winRate24h != null ? winRate24h + '%' : '—'}</b>`,
-      `▸ Avg PnL: <b>${stats24h?.avg_pnl != null ? fmtPct(stats24h.avg_pnl) : '—'}</b>`,
+      `▸ Win rate: <b>${winRate24h != null ? escapeHtml(String(winRate24h)) + '%' : '—'}</b>`,
+      `▸ Avg PnL: <b>${stats24h?.avg_pnl != null ? escapeHtml(fmtPct(stats24h.avg_pnl)) : '—'}</b>`,
       '',
       '🛣️ <b>ROUTE HEALTH</b>',
       ...routeLines,
       '',
       lastRouteTuneAgo != null
-        ? `🤖 <b>LAST AUTO-TUNE</b>: ${lastRouteTuneAgo}h ago`
+        ? `🤖 <b>LAST AUTO-TUNE</b>: ${escapeHtml(String(lastRouteTuneAgo))}h ago`
         : '🤖 <b>AUTO-TUNE</b>: not yet run',
       '',
       '🚨 <b>ALERTS (24h)</b>',
-      `▸ Large losses (< -30%): <b>${largeLosses24h}</b>`,
+      `▸ Large losses (&lt; -30%): <b>${largeLosses24h}</b>`,
       '',
       '🧠 <b>LEARNING</b>',
       `▸ Active lessons: <b>${lessonCount}</b>`,
@@ -330,7 +331,7 @@ export function autoStatusText() {
 
     const routeLines = routeWeights.map(r => {
       const wt = Number(r.weight);
-      const tag = wt <= 0.15 ? 'DISABLED ❌' : `${wt.toFixed(2)}x ✅`;
+      const tag = escapeHtml(wt <= 0.15 ? 'DISABLED ❌' : `${wt.toFixed(2)}x ✅`);
       return `▸ ${escapeHtml(r.route)}: ${tag}`;
     });
 
