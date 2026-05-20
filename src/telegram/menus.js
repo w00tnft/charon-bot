@@ -410,8 +410,8 @@ export async function sendTpSlDefaults(chatId, query = null) {
     },
   };
   if (query) return editMenuMessage(query, agentText(), keyboard);
-  const { bot } = await import('./bot.js');
-  await bot.sendMessage(chatId, agentText(), { parse_mode: 'HTML', ...keyboard });
+  const { safeSend } = await import('./send.js');
+  await safeSend(chatId, agentText(), keyboard);
 }
 
 async function editMenuMessage(query, text, extra = {}) {
@@ -419,25 +419,24 @@ async function editMenuMessage(query, text, extra = {}) {
   const chatId = query.message?.chat?.id || TELEGRAM_CHAT_ID;
   const messageId = query.message?.message_id;
   const { bot } = await import('./bot.js');
+  const { stripHtml } = await import('./send.js');
+  const safeText = stripHtml(text);
   if (!messageId) {
-    return bot.sendMessage(chatId, text, {
-      parse_mode: 'HTML',
+    return bot.sendMessage(chatId, safeText, {
       disable_web_page_preview: true,
       ...extra,
     });
   }
   try {
-    return await bot.editMessageText(text, {
+    return await bot.editMessageText(safeText, {
       chat_id: chatId,
       message_id: messageId,
-      parse_mode: 'HTML',
       disable_web_page_preview: true,
       ...extra,
     });
   } catch (err) {
     if (/message is not modified/i.test(err.message)) return null;
-    return bot.sendMessage(chatId, text, {
-      parse_mode: 'HTML',
+    return bot.sendMessage(chatId, safeText, {
       disable_web_page_preview: true,
       ...extra,
     });

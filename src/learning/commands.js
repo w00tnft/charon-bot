@@ -1,5 +1,5 @@
 import { bot } from '../telegram/bot.js';
-import { sendTelegram } from '../telegram/send.js';
+import { sendTelegram, safeSend } from '../telegram/send.js';
 import { now, formatWindow, parseWindowMs } from '../utils.js';
 import { escapeHtml } from '../format.js';
 import { db } from '../db/connection.js';
@@ -48,19 +48,16 @@ function weightsText(weights) {
 
 export async function runLearning(chatId, windowArg = '12h') {
   const windowMs = parseWindowMs(windowArg);
-  await bot.sendMessage(chatId, `Learning from the last ${formatWindow(windowMs)}...`);
+  await safeSend(chatId, `Learning from the last ${formatWindow(windowMs)}...`);
   const summary = summarizeLearningWindow(windowMs);
   const { lessons, raw } = await generateLessons(summary);
   const runId = storeLearningRun(windowMs, summary, lessons, raw);
-  await bot.sendMessage(chatId, learningReportText(runId, summary, lessons), {
-    parse_mode: 'HTML',
-    disable_web_page_preview: true,
-  });
+  await safeSend(chatId, learningReportText(runId, summary, lessons), { disable_web_page_preview: true });
   const updated = recalculateWeights();
   const weights = updated.length > 0 ? updated.map(r => ({
     route: r.route, weight: r.weight,
   })) : allRouteWeights();
-  return bot.sendMessage(chatId, weightsText(weights), { parse_mode: 'HTML' });
+  return safeSend(chatId, weightsText(weights));
 }
 
 export async function autoRunLearning(milestone) {
@@ -88,5 +85,5 @@ export async function sendLessons(chatId) {
   const text = rows.length
     ? rows.map((row, index) => `${index + 1}. ${escapeHtml(row.lesson)}`).join('\n')
     : 'No active lessons yet. Run /learn 12h after some dry-run exits.';
-  return bot.sendMessage(chatId, `🧠 <b>Active Lessons</b>\n\n${text}`, { parse_mode: 'HTML' });
+  return safeSend(chatId, `ACTIVE LESSONS\n\n${text}`);
 }

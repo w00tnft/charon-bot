@@ -11,7 +11,7 @@ import { logDecisionEvent } from '../db/decisions.js';
 import { refreshCandidateForExecution } from './positions.js';
 import { bot } from '../telegram/bot.js';
 import { candidateSummary } from '../telegram/format.js';
-import { sendPositionOpen, sendTelegram } from '../telegram/send.js';
+import { sendPositionOpen, sendTelegram, safeSend } from '../telegram/send.js';
 import { updateCandidateStatus } from '../db/candidates.js';
 import { createTradeIntent } from '../db/intents.js';
 
@@ -57,9 +57,9 @@ export async function executeLiveSell(position, reason) {
 
 export async function executeConfirmedIntent(chatId, intentId) {
   const intent = intentById(intentId);
-  if (!intent || intent.status !== 'pending_confirmation') return bot.sendMessage(chatId, 'Pending intent not found.');
+  if (!intent || intent.status !== 'pending_confirmation') return safeSend(chatId, 'Pending intent not found.');
   if (!canOpenMorePositions()) {
-    return bot.sendMessage(chatId, `Max open positions reached (${openPositionCount()}/${numSetting('max_open_positions', 3)}).`);
+    return safeSend(chatId, `Max open positions reached (${openPositionCount()}/${numSetting('max_open_positions', 3)}).`);
   }
   const { decision } = intent.payload;
   try {
@@ -69,20 +69,20 @@ export async function executeConfirmedIntent(chatId, intentId) {
     });
     if (!freshRow.candidate.filters?.passed) {
       db.prepare('UPDATE trade_intents SET status = ?, updated_at_ms = ? WHERE id = ?').run('rejected_stale', now(), intentId);
-      return bot.sendMessage(chatId, [
-        '🛑 <b>Trade intent rejected on fresh check</b>',
+      return safeSend(chatId, [
+        'TRADE INTENT REJECTED (fresh check)',
         '',
         candidateSummary(freshRow.candidate, decision),
         '',
-        `Failures: ${escapeHtml((freshRow.candidate.filters?.failures || []).join('; ') || 'fresh execution guard failed')}`,
-      ].join('\n'), { parse_mode: 'HTML', disable_web_page_preview: true });
+        `Failures: ${(freshRow.candidate.filters?.failures || []).join('; ') || 'fresh execution guard failed'}`,
+      ].join('\n'), { disable_web_page_preview: true });
     }
     const strat = activeStrategy();
     const amountLamports = Math.floor((strat.position_size_sol ?? numSetting('dry_run_buy_sol', 0.1)) * 1_000_000_000);
     const balance = await liveWalletBalanceLamports();
     if (balance < amountLamports + LIVE_MIN_SOL_RESERVE_LAMPORTS) {
       db.prepare('UPDATE trade_intents SET status = ?, updated_at_ms = ? WHERE id = ?').run('rejected_insufficient_balance', now(), intentId);
-      return bot.sendMessage(chatId, `Insufficient SOL balance. Need ${fmtSol((amountLamports + LIVE_MIN_SOL_RESERVE_LAMPORTS) / 1_000_000_000)} SOL.`, { parse_mode: 'HTML' });
+      return safeSend(chatId, `Insufficient SOL balance. Need ${fmtSol((amountLamports + LIVE_MIN_SOL_RESERVE_LAMPORTS) / 1_000_000_000)} SOL.`);
     }
     const swap = await executeJupiterSwap({
       inputMint: WSOL_MINT,
@@ -108,13 +108,13 @@ export async function executeConfirmedIntent(chatId, intentId) {
     return sendPositionOpen(positionId);
   } catch (err) {
     db.prepare('UPDATE trade_intents SET status = ?, updated_at_ms = ? WHERE id = ?').run('execution_failed', now(), intentId);
-    return bot.sendMessage(chatId, `Live execution failed: ${escapeHtml(err.message)}`, { parse_mode: 'HTML' });
+    return safeSend(chatId, `Live execution failed: ${err.message}`);
   }
 }
 
 export async function rejectIntent(chatId, intentId) {
   const intent = intentById(intentId);
-  if (!intent) return bot.sendMessage(chatId, 'Intent not found.');
+  if (!intent) return safeSend(chatId, 'Intent not found.');
   db.prepare('UPDATE trade_intents SET status = ?, updated_at_ms = ? WHERE id = ?').run('rejected', now(), intentId);
-  return bot.sendMessage(chatId, `Rejected trade intent #${intentId}.`);
+  return safeSend(chatId, `Rejected trade intent #${intentId}.`);
 }

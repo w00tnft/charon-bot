@@ -8,12 +8,33 @@ import { candidateSummary, compactCandidateLine, batchRevealSummary, formatPosit
 import { candidateButtons, batchRevealButtons, positionButtons, intentButtons } from './menus.js';
 import { batchById } from '../db/decisions.js';
 
+export function stripHtml(text) {
+  return String(text ?? '')
+    .replace(/<\/?b>/gi, '')
+    .replace(/<\/?i>/gi, '')
+    .replace(/<\/?code>/gi, '')
+    .replace(/<\/?pre>/gi, '')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+}
+
+export async function safeSend(chatId, text, opts = {}) {
+  try {
+    const { parse_mode, ...options } = opts;
+    await bot.sendMessage(chatId, stripHtml(text), options);
+  } catch (err) {
+    console.error('[telegram] send failed:', err.message);
+  }
+}
+
 export async function sendTelegram(text, extra = {}) {
-  return bot.sendMessage(TELEGRAM_CHAT_ID, text, {
-    parse_mode: 'HTML',
+  const { parse_mode, ...safeExtra } = extra;
+  return bot.sendMessage(TELEGRAM_CHAT_ID, stripHtml(text), {
     disable_web_page_preview: true,
     ...(TELEGRAM_TOPIC_ID ? { message_thread_id: Number(TELEGRAM_TOPIC_ID) } : {}),
-    ...extra,
+    ...safeExtra,
   });
 }
 
@@ -35,8 +56,7 @@ export async function probeTelegram() {
   let succeeded = false;
   for (const { label, id } of unique) {
     try {
-      await bot.sendMessage(id, '✅ <b>Charon connected</b> — Telegram delivery confirmed.', {
-        parse_mode: 'HTML',
+      await bot.sendMessage(id, 'Charon connected — Telegram delivery confirmed.', {
         disable_web_page_preview: true,
         ...(TELEGRAM_TOPIC_ID ? { message_thread_id: Number(TELEGRAM_TOPIC_ID) } : {}),
       });
@@ -99,8 +119,7 @@ export async function sendBatch(chatId, batchId) {
     callback_data: `cand:${row.id}`,
   }]));
   keyboard.push([{ text: 'Positions', callback_data: 'menu:positions' }]);
-  return bot.sendMessage(chatId, lines.filter(Boolean).join('\n'), {
-    parse_mode: 'HTML',
+  return bot.sendMessage(chatId, stripHtml(lines.filter(Boolean).join('\n')), {
     disable_web_page_preview: true,
     reply_markup: { inline_keyboard: keyboard },
   });

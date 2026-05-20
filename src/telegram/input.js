@@ -1,5 +1,6 @@
 import { bot } from './bot.js';
 import { TELEGRAM_CHAT_ID } from '../config.js';
+import { stripHtml } from './send.js';
 import { now, parseNumericInput } from '../utils.js';
 import { activeStrategy, setSetting, updateStrategyConfig } from '../db/settings.js';
 import {
@@ -74,28 +75,26 @@ export async function consumeNumericFilterInput(chatId, text, userMessageId = nu
     delete newConfig.name;
     updateStrategyConfig(strat.id, newConfig);
     if (pending.messageId) {
-      await bot.editMessageText(strategyMenuText(), {
+      await bot.editMessageText(stripHtml(strategyMenuText()), {
         chat_id: chatId,
         message_id: pending.messageId,
-        parse_mode: 'HTML',
         disable_web_page_preview: true,
         ...strategyKeyboard(),
-      }).catch(() => bot.sendMessage(chatId, strategyMenuText(), { parse_mode: 'HTML', ...strategyKeyboard() }));
+      }).catch(() => bot.sendMessage(chatId, stripHtml(strategyMenuText()), strategyKeyboard()));
     } else {
-      await bot.sendMessage(chatId, strategyMenuText(), { parse_mode: 'HTML', ...strategyKeyboard() });
+      await bot.sendMessage(chatId, stripHtml(strategyMenuText()), strategyKeyboard());
     }
   } else {
     setSetting(pending.key, String(value));
     if (pending.messageId) {
-      await bot.editMessageText(filtersText(), {
+      await bot.editMessageText(stripHtml(filtersText()), {
         chat_id: chatId,
         message_id: pending.messageId,
-        parse_mode: 'HTML',
         disable_web_page_preview: true,
         ...filtersKeyboard(),
-      }).catch(() => bot.sendMessage(chatId, filtersText(), { parse_mode: 'HTML', ...filtersKeyboard() }));
+      }).catch(() => bot.sendMessage(chatId, stripHtml(filtersText()), filtersKeyboard()));
     } else {
-      await bot.sendMessage(chatId, filtersText(), { parse_mode: 'HTML', ...filtersKeyboard() });
+      await bot.sendMessage(chatId, stripHtml(filtersText()), filtersKeyboard());
     }
   }
   return true;
@@ -104,25 +103,23 @@ export async function consumeNumericFilterInput(chatId, text, userMessageId = nu
 async function editMenuMessage(query, text, extra = {}) {
   const chatId = query.message?.chat?.id || TELEGRAM_CHAT_ID;
   const messageId = query.message?.message_id;
+  const safeText = stripHtml(text);
   if (!messageId) {
-    return bot.sendMessage(chatId, text, {
-      parse_mode: 'HTML',
+    return bot.sendMessage(chatId, safeText, {
       disable_web_page_preview: true,
       ...extra,
     });
   }
   try {
-    return await bot.editMessageText(text, {
+    return await bot.editMessageText(safeText, {
       chat_id: chatId,
       message_id: messageId,
-      parse_mode: 'HTML',
       disable_web_page_preview: true,
       ...extra,
     });
   } catch (err) {
     if (/message is not modified/i.test(err.message)) return null;
-    return bot.sendMessage(chatId, text, {
-      parse_mode: 'HTML',
+    return bot.sendMessage(chatId, safeText, {
       disable_web_page_preview: true,
       ...extra,
     });

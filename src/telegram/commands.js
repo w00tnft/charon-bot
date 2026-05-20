@@ -21,7 +21,7 @@ import {
   strategyMenuText,
   strategyKeyboard,
 } from './menus.js';
-import { sendTelegram, sendBatch, sendPositionOpen } from './send.js';
+import { sendTelegram, sendBatch, sendPositionOpen, safeSend } from './send.js';
 import { candidateSummary, formatPosition } from './format.js';
 import { refreshPosition } from '../execution/positions.js';
 import { executeLiveSell } from '../execution/router.js';
@@ -51,19 +51,19 @@ export async function handleMessage(msg) {
   if (!text.startsWith('/')) return;
   if (text.startsWith('/menu')) return sendMenu(chatId);
   if (text.startsWith('/positions')) return sendPositions(chatId);
-  if (text.startsWith('/filters')) return bot.sendMessage(chatId, filtersText(), { parse_mode: 'HTML' });
+  if (text.startsWith('/filters')) return safeSend(chatId, filtersText());
   if (text.startsWith('/strategy')) {
     const parts = text.split(/\s+/);
     const id = parts[1];
     if (!id) {
-      return bot.sendMessage(chatId, strategyMenuText(), { parse_mode: 'HTML', ...strategyKeyboard() });
+      return safeSend(chatId, strategyMenuText(), strategyKeyboard());
     }
     const valid = ['sniper', 'dip_buy', 'smart_money', 'degen'];
     if (!valid.includes(id)) {
-      return bot.sendMessage(chatId, `Unknown strategy. Valid: ${valid.join(', ')}`);
+      return safeSend(chatId, `Unknown strategy. Valid: ${valid.join(', ')}`);
     }
     setActiveStrategy(id);
-    return bot.sendMessage(chatId, strategyMenuText(), { parse_mode: 'HTML', ...strategyKeyboard() });
+    return safeSend(chatId, strategyMenuText(), strategyKeyboard());
   }
   if (text.startsWith('/stratset')) {
     const parts = text.split(/\s+/);
@@ -73,7 +73,7 @@ export async function handleMessage(msg) {
       return bot.sendMessage(chatId, 'Usage: /stratset <strategy_id> <key> <value>\n\nExample: /stratset sniper tp_percent 75\n\nKeys: tp_percent, sl_percent, position_size_sol, max_open_positions, min_mcap_usd, max_mcap_usd, min_holders, trailing_enabled, trailing_percent, partial_tp, partial_tp_at_percent, partial_tp_sell_percent, max_hold_ms, use_llm, llm_min_confidence, min_source_count, require_fee_claim, min_fee_claim_sol, min_gmgn_total_fee_sol, max_ath_distance_pct');
     }
     const strat = strategyById(id);
-    if (!strat) return bot.sendMessage(chatId, `Strategy "${id}" not found.`);
+    if (!strat) return safeSend(chatId, `Strategy "${id}" not found.`);
     const numKeys = new Set(['tp_percent', 'sl_percent', 'position_size_sol', 'max_open_positions', 'min_mcap_usd', 'max_mcap_usd', 'min_holders', 'max_top20_holder_percent', 'trailing_percent', 'partial_tp_at_percent', 'partial_tp_sell_percent', 'max_hold_ms', 'llm_min_confidence', 'min_source_count', 'min_fee_claim_sol', 'min_gmgn_total_fee_sol', 'max_ath_distance_pct', 'token_age_max_ms', 'trending_min_volume_usd', 'trending_min_swaps', 'trending_max_rug_ratio', 'trending_max_bundler_rate', 'min_saved_wallet_holders', 'min_graduated_volume_usd']);
     const boolKeys = new Set(['trailing_enabled', 'partial_tp', 'use_llm', 'require_fee_claim']);
     const newConfig = { ...strat };
@@ -87,11 +87,11 @@ export async function handleMessage(msg) {
       newConfig[key] = value;
     }
     updateStrategyConfig(id, newConfig);
-    return bot.sendMessage(chatId, `Updated ${id}.${key} = ${value}\n\n${strategyMenuText()}`, { parse_mode: 'HTML' });
+    return safeSend(chatId, `Updated ${id}.${key} = ${value}\n\n${strategyMenuText()}`);
   }
   if (text.startsWith('/blacklist')) return sendBlacklistReport(chatId);
   if (text.startsWith('/report')) {
-    await bot.sendMessage(chatId, '⚡ Generating report...');
+    await safeSend(chatId, 'Generating report...');
     try {
       await sendDailyReport();
     } catch (err) {
@@ -107,30 +107,30 @@ export async function handleMessage(msg) {
     return runLearning(chatId, windowArg);
   }
   if (text.startsWith('/lessons')) return sendLessons(chatId);
-  if (text.startsWith('/autostatus')) return bot.sendMessage(chatId, autoStatusText(), { parse_mode: 'HTML' });
+  if (text.startsWith('/autostatus')) return safeSend(chatId, autoStatusText());
   if (text.startsWith('/candidate')) {
     const mint = text.split(/\s+/)[1];
     if (!mint) return bot.sendMessage(chatId, 'Usage: /candidate <mint>');
     const row = latestCandidateByMint(mint);
-    if (!row) return bot.sendMessage(chatId, 'Candidate not found.');
+    if (!row) return safeSend(chatId, 'Candidate not found.');
     return sendCandidate(chatId, row.id);
   }
   if (text.startsWith('/walletadd')) {
     const [, label, address] = text.split(/\s+/);
-    if (!label || !address) return bot.sendMessage(chatId, 'Usage: /walletadd <label> <address>');
+    if (!label || !address) return safeSend(chatId, 'Usage: /walletadd <label> <address>');
     db.prepare(`
       INSERT INTO saved_wallets (label, address, created_at_ms) VALUES (?, ?, ?)
       ON CONFLICT(label) DO UPDATE SET address = excluded.address
     `).run(label, address, now());
     addSmartWallet(label, address);
-    return bot.sendMessage(chatId, `✅ Added ${label} to smart money tracking`);
+    return safeSend(chatId, `Added ${label} to smart money tracking`);
   }
   if (text.startsWith('/walletremove')) {
     const label = text.split(/\s+/)[1];
-    if (!label) return bot.sendMessage(chatId, 'Usage: /walletremove <label>');
+    if (!label) return safeSend(chatId, 'Usage: /walletremove <label>');
     db.prepare('DELETE FROM saved_wallets WHERE label = ?').run(label);
     removeSmartWallet(label);
-    return bot.sendMessage(chatId, `Removed ${label}.`);
+    return safeSend(chatId, `Removed ${label}.`);
   }
   if (text.startsWith('/resetstats')) {
     const isSelective = text.includes('selective');
@@ -143,17 +143,16 @@ export async function handleMessage(msg) {
       const lessonsBefore = db.prepare("SELECT COUNT(*) AS c FROM learning_lessons").get().c;
       const blCount = db.prepare("SELECT COUNT(*) AS c FROM blacklist").get().c;
       const swCount = db.prepare("SELECT COUNT(*) AS c FROM smart_wallets WHERE active = 1").get().c;
-      return bot.sendMessage(chatId,
-        '⚠️ <b>SELECTIVE RESET — will wipe trade history, keep smart memory</b>\n\n' +
-        '🗑️ Will WIPE:\n' +
-        `▸ Positions: ${posBefore} | Trades: ${tradesBefore}\n` +
-        '▸ Capital snapshots\n' +
-        '▸ Route weights (reset to 1.0×)\n\n' +
-        '🧠 Will KEEP:\n' +
-        `▸ Lessons: ${lessonsBefore} | Blacklist: ${blCount}\n` +
-        `▸ Smart wallets: ${swCount} | Strategies\n\n` +
-        'Send <code>/resetstats selective confirm</code> to proceed.',
-        { parse_mode: 'HTML' }
+      return safeSend(chatId,
+        'SELECTIVE RESET — will wipe trade history, keep smart memory\n\n' +
+        'Will WIPE:\n' +
+        `  Positions: ${posBefore} | Trades: ${tradesBefore}\n` +
+        '  Capital snapshots\n' +
+        '  Route weights (reset to 1.0x)\n\n' +
+        'Will KEEP:\n' +
+        `  Lessons: ${lessonsBefore} | Blacklist: ${blCount}\n` +
+        `  Smart wallets: ${swCount} | Strategies\n\n` +
+        'Send /resetstats selective confirm to proceed.'
       );
     }
 
@@ -175,29 +174,27 @@ export async function handleMessage(msg) {
       db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('starting_capital_sol', '1.0')").run();
       db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('last_auto_learn_count', '0')").run();
 
-      return bot.sendMessage(chatId,
-        '✅ <b>SELECTIVE RESET DONE</b>\n\n' +
-        `🗑️ Wiped: Trades: ${tradesBefore} | Capital: reset | Route weights: reset\n` +
-        `🧠 Kept: Lessons: ${lessonsBefore} active | Blacklist: ${blCount} | Smart wallets: ${swCount}\n\n` +
-        '🚀 Clean history, smart memory! Learning fires at 25 closes.',
-        { parse_mode: 'HTML' }
+      return safeSend(chatId,
+        'SELECTIVE RESET DONE\n\n' +
+        `Wiped: Trades: ${tradesBefore} | Capital: reset | Route weights: reset\n` +
+        `Kept: Lessons: ${lessonsBefore} active | Blacklist: ${blCount} | Smart wallets: ${swCount}\n\n` +
+        'Clean history, smart memory! Learning fires at 25 closes.'
       );
     }
 
     if (!isConfirm) {
       // Full reset warning
-      return bot.sendMessage(chatId,
-        '⚠️ <b>WARNING: This will delete all trading history.</b>\n\n' +
+      return safeSend(chatId,
+        'WARNING: This will delete all trading history.\n\n' +
         'Will clear:\n' +
-        '▸ All positions, trades, lessons, decisions\n' +
-        '▸ Signal events, capital snapshots\n' +
-        '▸ Route weights (reset to 1.0×)\n\n' +
+        '  All positions, trades, lessons, decisions\n' +
+        '  Signal events, capital snapshots\n' +
+        '  Route weights (reset to 1.0x)\n\n' +
         'Will keep:\n' +
-        '▸ Blacklist, whitelist, smart wallets\n' +
-        '▸ Strategy config, TP/SL rules\n\n' +
-        'Send <code>/resetstats confirm</code> to proceed.\n' +
-        'Or send <code>/resetstats selective</code> to keep smart memory.',
-        { parse_mode: 'HTML' }
+        '  Blacklist, whitelist, smart wallets\n' +
+        '  Strategy config, TP/SL rules\n\n' +
+        'Send /resetstats confirm to proceed.\n' +
+        'Or send /resetstats selective to keep smart memory.'
       );
     }
 
@@ -227,35 +224,34 @@ export async function handleMessage(msg) {
     db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('starting_capital_sol', '1.0')").run();
     db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('last_auto_learn_count', '0')").run();
 
-    return bot.sendMessage(chatId,
-      '✅ <b>STATS RESET COMPLETE</b>\n\n' +
-      '🗑️ Cleared:\n' +
-      `▸ Positions: ${posBefore} deleted\n` +
-      `▸ Lessons: ${lessonsBefore} deleted\n` +
-      '▸ Route weights: reset to 1.0×\n' +
-      '▸ Capital: reset to 1.0 SOL\n\n' +
-      '🔒 Kept:\n' +
-      `▸ Blacklist: ${blCount} entries\n` +
-      `▸ Smart wallets: ${swCount} wallets\n` +
-      '▸ Strategy config: unchanged\n\n' +
-      '🚀 Fresh start! Learning activates at 25 closed positions.',
-      { parse_mode: 'HTML' }
+    return safeSend(chatId,
+      'STATS RESET COMPLETE\n\n' +
+      'Cleared:\n' +
+      `  Positions: ${posBefore} deleted\n` +
+      `  Lessons: ${lessonsBefore} deleted\n` +
+      '  Route weights: reset to 1.0x\n' +
+      '  Capital: reset to 1.0 SOL\n\n' +
+      'Kept:\n' +
+      `  Blacklist: ${blCount} entries\n` +
+      `  Smart wallets: ${swCount} wallets\n` +
+      '  Strategy config: unchanged\n\n' +
+      'Fresh start! Learning activates at 25 closed positions.'
     );
   }
   if (text.startsWith('/backtest')) {
-    await bot.sendMessage(chatId, '🔬 <b>Starting backtest...</b>\nThis may take 2–5 minutes.', { parse_mode: 'HTML' });
+    await safeSend(chatId, 'Starting backtest... This may take 2-5 minutes.');
     try {
       const { runBacktest, formatBacktestReport } = await import('../backtest/engine.js');
       const results = await runBacktest({
         onProgress: async (msg) => {
-          await bot.sendMessage(chatId, `⏳ ${msg}`).catch(() => {});
+          await safeSend(chatId, msg);
         },
       });
       const report = formatBacktestReport(results);
-      await bot.sendMessage(chatId, report, { parse_mode: 'HTML' });
+      await safeSend(chatId, report);
     } catch (err) {
       console.error('[backtest] error:', err);
-      await bot.sendMessage(chatId, `⚠️ Backtest failed: ${escapeHtml(err.message)}`, { parse_mode: 'HTML' });
+      await safeSend(chatId, `Backtest failed: ${err.message}`);
     }
     return;
   }
@@ -362,7 +358,7 @@ export async function handleMessage(msg) {
         : totalTrades >= 50 ? '✅ 50-trade threshold reached' : '⏰ Not enough daily data yet',
     ].filter(l => l !== '').join('\n');
 
-    return bot.sendMessage(chatId, lines, { parse_mode: 'HTML' });
+    return safeSend(chatId, lines);
   }
   if (text.startsWith('/filterstat')) {
     const { getFilterStats } = await import('../filters/candidateFilter.js');
@@ -396,7 +392,7 @@ export async function handleMessage(msg) {
       '<i>Stats reset on bot restart</i>',
     ].join('\n');
 
-    return bot.sendMessage(chatId, lines, { parse_mode: 'HTML' });
+    return safeSend(chatId, lines);
   }
   if (text.startsWith('/golivewhen')) {
     const REQUIRED_WIN_RATE = 48;
@@ -463,12 +459,12 @@ export async function handleMessage(msg) {
         : '💡 Keep accumulating dry-run trades. Use /drystat for details.',
     ].join('\n');
 
-    return bot.sendMessage(chatId, lines, { parse_mode: 'HTML' });
+    return safeSend(chatId, lines);
   }
   if (text.startsWith('/clearpositions')) {
     const { closeStuckPositions } = await import('../db/positions.js');
     const cleared = closeStuckPositions(0); // 0ms = close ALL open dry_run positions
-    return bot.sendMessage(chatId, `✅ Cleared ${cleared} stuck position(s). Slots are now free.`);
+    return safeSend(chatId, `Cleared ${cleared} stuck position(s). Slots are now free.`);
   }
   if (text.startsWith('/walletlist')) return sendSmartWalletList(chatId);
   if (text.startsWith('/walletstats')) return sendSmartWalletStats(chatId);
@@ -505,19 +501,18 @@ export async function handleMessage(msg) {
       'default_trailing_percent',
     ]);
     if (!valid.has(key) || value == null) {
-      return bot.sendMessage(chatId, `Usage: /setfilter &lt;name&gt; &lt;value&gt;\n\n${filtersText()}`, { parse_mode: 'HTML' });
+      return safeSend(chatId, `Usage: /setfilter <name> <value>\n\n${filtersText()}`);
     }
     setSetting(key, value === 'off' ? '0' : value);
-    return bot.sendMessage(chatId, filtersText(), { parse_mode: 'HTML' });
+    return safeSend(chatId, filtersText());
   }
 }
 
 export async function sendCandidate(chatId, id) {
   const row = candidateById(id);
-  if (!row) return bot.sendMessage(chatId, 'Candidate not found.');
+  if (!row) return safeSend(chatId, 'Candidate not found.');
   const decision = db.prepare('SELECT * FROM llm_decisions WHERE candidate_id = ? ORDER BY id DESC LIMIT 1').get(id);
-  await bot.sendMessage(chatId, candidateSummary(row.candidate, decision), {
-    parse_mode: 'HTML',
+  await safeSend(chatId, candidateSummary(row.candidate, decision), {
     disable_web_page_preview: true,
     ...candidateButtons(id, decision),
   });
@@ -526,12 +521,12 @@ export async function sendCandidate(chatId, id) {
 export async function sendPositions(chatId) {
   const rows = allPositions(12);
   const text = rows.length ? rows.map(formatPosition).join('\n\n') : 'No dry-run positions yet.';
-  await bot.sendMessage(chatId, `📍 <b>Positions</b>\n\n${text}`, { parse_mode: 'HTML', disable_web_page_preview: true });
+  await safeSend(chatId, `POSITIONS\n\n${text}`, { disable_web_page_preview: true });
 }
 
 export async function sendPosition(chatId, id, query = null) {
   let row = db.prepare('SELECT * FROM dry_run_positions WHERE id = ?').get(id);
-  if (!row) return bot.sendMessage(chatId, 'Position not found.');
+  if (!row) return safeSend(chatId, 'Position not found.');
   if (row.status === 'open') {
     const refreshed = await refreshPosition(row, { autoExit: row.execution_mode !== 'live' }).catch((err) => {
       console.log(`[position] refresh ${id} ${err.message}`);
@@ -541,12 +536,12 @@ export async function sendPosition(chatId, id, query = null) {
   }
   const buttons = row.status === 'open' ? positionButtons(id) : {};
   if (query) return editMenuMessage(query, formatPosition(row), buttons);
-  await bot.sendMessage(chatId, formatPosition(row), { parse_mode: 'HTML', disable_web_page_preview: true, ...buttons });
+  await safeSend(chatId, formatPosition(row), { disable_web_page_preview: true, ...buttons });
 }
 
 export async function closePosition(chatId, id, reason) {
   const row = db.prepare('SELECT * FROM dry_run_positions WHERE id = ?').get(id);
-  if (!row || row.status !== 'open') return bot.sendMessage(chatId, 'Open position not found.');
+  if (!row || row.status !== 'open') return safeSend(chatId, 'Open position not found.');
   const result = await refreshPosition(row, { autoExit: false });
   const price = result?.price ?? row.high_water_price ?? row.entry_price;
   const mcap = result?.mcap ?? row.high_water_mcap ?? row.entry_mcap;
@@ -565,11 +560,11 @@ export async function closePosition(chatId, id, reason) {
     VALUES (?, ?, 'sell', ?, ?, ?, ?, ?, ?, ?)
   `).run(id, row.mint, now(), price, mcap, row.size_sol, row.token_amount_est, reason, json({ pnlPercent, pnlSol, sell }));
   const label = row.execution_mode === 'live' ? 'Closed live position' : 'Closed dry-run position';
-  await bot.sendMessage(chatId, `${label} #${id}: ${escapeHtml(reason)} ${fmtPct(pnlPercent)}`, { parse_mode: 'HTML' });
+  await safeSend(chatId, `${label} #${id}: ${reason} ${fmtPct(pnlPercent)}`);
 }
 
 export async function updatePositionRule(chatId, id, field, nextValue, query = null) {
-  if (!Number.isFinite(nextValue)) return bot.sendMessage(chatId, 'Invalid value.');
+  if (!Number.isFinite(nextValue)) return safeSend(chatId, 'Invalid value.');
   db.prepare(`UPDATE dry_run_positions SET ${field} = ? WHERE id = ?`).run(nextValue, id);
   const row = db.prepare('SELECT * FROM dry_run_positions WHERE id = ?').get(id);
   if (row) {
@@ -589,7 +584,7 @@ export async function updatePositionRule(chatId, id, field, nextValue, query = n
 
 export async function toggleTrailing(chatId, id, query = null) {
   const row = db.prepare('SELECT * FROM dry_run_positions WHERE id = ?').get(id);
-  if (!row) return bot.sendMessage(chatId, 'Position not found.');
+  if (!row) return safeSend(chatId, 'Position not found.');
   const next = row.trailing_enabled ? 0 : 1;
   db.prepare('UPDATE dry_run_positions SET trailing_enabled = ? WHERE id = ?').run(next, id);
   db.prepare(`
@@ -617,7 +612,7 @@ export async function sendSmartWalletList(chatId) {
       lines.push(`▸ ${escapeHtml(w.label)}: ${addr} ${status}`);
     }
   }
-  return bot.sendMessage(chatId, lines.join('\n'), { parse_mode: 'HTML' });
+  return safeSend(chatId, lines.join('\n'));
 }
 
 export async function sendSmartWalletStats(chatId) {
@@ -632,7 +627,7 @@ export async function sendSmartWalletStats(chatId) {
       lines.push(`▸ ${escapeHtml(w.label)}: ${w.signals} signals, ${wr}% win (${w.wins}W/${w.losses}L)`);
     }
   }
-  return bot.sendMessage(chatId, lines.join('\n'), { parse_mode: 'HTML' });
+  return safeSend(chatId, lines.join('\n'));
 }
 
 export function setupTelegram() {
@@ -665,8 +660,7 @@ export function setupTelegram() {
 
 async function sendMenu(chatId = TELEGRAM_CHAT_ID) {
   const { TELEGRAM_TOPIC_ID } = await import('../config.js');
-  await bot.sendMessage(chatId, mainMenuText(), {
-    parse_mode: 'HTML',
+  await safeSend(chatId, mainMenuText(), {
     disable_web_page_preview: true,
     ...(TELEGRAM_TOPIC_ID ? { message_thread_id: Number(TELEGRAM_TOPIC_ID) } : {}),
     ...menuKeyboard(),
@@ -696,7 +690,7 @@ export async function sendBlacklistReport(chatId) {
       }
     }
   }
-  return bot.sendMessage(chatId, lines.join('\n'), { parse_mode: 'HTML' });
+  return safeSend(chatId, lines.join('\n'));
 }
 
 export async function sendSummary(chatId) {
@@ -731,7 +725,7 @@ export async function sendSummary(chatId) {
     '',
     `Active lessons: <b>${lessonCount}</b>`,
   ];
-  return bot.sendMessage(chatId, lines.join('\n'), { parse_mode: 'HTML' });
+  return safeSend(chatId, lines.join('\n'));
 }
 
 export async function sendPnl(chatId, query = null) {
@@ -739,8 +733,8 @@ export async function sendPnl(chatId, query = null) {
   const startingSol = numSetting('starting_capital_sol', 1.0);
   const closed = db.prepare("SELECT pnl_percent, pnl_sol, exit_class, snapshot_json, closed_at_ms FROM dry_run_positions WHERE status = 'closed'").all();
   if (!closed.length) {
-    const text = `📊 <b>PnL</b>\n\nNo closed positions yet.\n💰 Starting balance: <b>${fmtSol(startingSol)} SOL</b>`;
-    return query ? editMenuMessage(query, text, navKeyboard()) : bot.sendMessage(chatId, text, { parse_mode: 'HTML' });
+    const text = `PNL\n\nNo closed positions yet.\nStarting balance: ${fmtSol(startingSol)} SOL`;
+    return query ? editMenuMessage(query, text, navKeyboard()) : safeSend(chatId, text);
   }
 
   function calcStats(positions) {
@@ -803,7 +797,7 @@ export async function sendPnl(chatId, query = null) {
     ...routeLines,
   ];
   const text = lines.join('\n');
-  return query ? editMenuMessage(query, text, navKeyboard()) : bot.sendMessage(chatId, text, { parse_mode: 'HTML' });
+  return query ? editMenuMessage(query, text, navKeyboard()) : safeSend(chatId, text);
 }
 
 function parseSetFilter(text) {
