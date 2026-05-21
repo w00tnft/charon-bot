@@ -185,7 +185,7 @@ export async function fetchTrendingMidCap() {
   const MCAP_MIN = 500_000;
   const MCAP_MAX = 5_000_000;
   const LIQ_MIN  = 30_000;
-  const VOL_MIN  = 10_000;
+  const VOL_MIN  = 5_000;
 
   const seen = new Set();
 
@@ -204,30 +204,22 @@ export async function fetchTrendingMidCap() {
     }
   }
 
-  // Search endpoint — parallel requests, has marketCap on each pair
-  const SEARCH_TERMS = ['solana meme', 'sol token'];
-  const searchResults = await Promise.allSettled(
+  // Search endpoint — 6 parallel requests, has marketCap on each pair
+  const SEARCH_TERMS = ['pepe', 'cat', 'dog', 'moon', 'ai', 'based'];
+  const searchResults = await Promise.all(
     SEARCH_TERMS.map(term =>
       axios.get(`${DEXSCREENER_BASE}/latest/dex/search`, {
         params: { q: term },
         timeout: 8_000,
         headers: { Accept: 'application/json' },
+      }).catch(err => {
+        console.log(`[tokenData] search "${term}" failed: ${err.message}`);
+        return null;
       })
     )
   );
   for (const r of searchResults) {
-    if (r.status === 'fulfilled') parsePairs(r.value.data?.pairs);
-  }
-
-  // Active Solana pairs — full data including marketCap
-  try {
-    const r = await axios.get(`${DEXSCREENER_BASE}/latest/dex/pairs/solana`, {
-      timeout: 8_000,
-      headers: { Accept: 'application/json' },
-    });
-    parsePairs(r.data?.pairs);
-  } catch (err) {
-    console.log(`[tokenData] Solana pairs fetch failed: ${err.message}`);
+    if (r) parsePairs(r.data?.pairs);
   }
 
   const mints = [...seen].slice(0, 100);
