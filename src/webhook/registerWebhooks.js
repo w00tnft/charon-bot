@@ -16,6 +16,12 @@ export async function registerWebhook(poolAddresses) {
     console.log('[webhook] HELIUS_API_KEY not set — skipping Helius registration');
     return null;
   }
+  if (!poolAddresses || poolAddresses.length === 0) {
+    console.log('[webhook] No pool addresses yet');
+    console.log('[webhook] Skipping Helius registration');
+    console.log('[webhook] Will retry on next pool refresh');
+    return null;
+  }
   try {
     const r = await axios.post(
       `${HELIUS_BASE}/webhooks?api-key=${HELIUS_API_KEY}`,
