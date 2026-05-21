@@ -4,6 +4,7 @@ import { numSetting, boolSetting } from '../db/settings.js';
 import { upsertCandidate, updateCandidateStatus, recentEligibleCandidates, candidateById } from '../db/candidates.js';
 import { storeDecision, storeBatchDecision, logDecisionEvent } from '../db/decisions.js';
 import { buildCandidate, filterCandidate, signalLabel } from './candidateBuilder.js';
+import { runCandidateFilter } from '../filters/candidateFilter.js';
 import { decideCandidateBatch } from './llm.js';
 import { activeStrategy } from '../db/settings.js';
 import { createDryRunPosition, createLivePosition, canOpenMorePositions, openPositionCount, tradingMode } from '../db/positions.js';
@@ -29,6 +30,16 @@ export async function processCandidateFromSignals(signals) {
     const strat = activeStrategy();
     const max = strat.max_open_positions ?? numSetting('max_open_positions', 3);
     console.log(`[agent] max positions reached (${openPositionCount()}/${max}), skipping ${signals.mint.slice(0, 8)}...`);
+    return;
+  }
+
+  // Run 3-layer candidate filter before expensive GMGN/Jupiter enrichment
+  const preFilter = await runCandidateFilter(signals.mint).catch(err => {
+    console.log(`[agent] candidateFilter error for ${signals.mint.slice(0, 8)}: ${err.message} — proceeding`);
+    return { passed: true, failures: [] };
+  });
+  if (!preFilter.passed) {
+    console.log(`[agent] ${signals.mint.slice(0, 8)} pre-filter rejected L${preFilter.layer}: ${preFilter.failures[0]}`);
     return;
   }
 
