@@ -8,6 +8,20 @@ const MAX_MCAP_USD = 5_000_000;
 const POSITION_SIZE_SOL = 0.03;
 const GAS_BUFFER_SOL = 0.01;
 
+const recentSignals = new Map();
+const DEDUP_WINDOW_MS = 30_000;
+
+function isDuplicate(mint, solAmount) {
+  const key = `${mint}-${Math.round(solAmount * 10)}`;
+  const last = recentSignals.get(key);
+  if (last && Date.now() - last < DEDUP_WINDOW_MS) return true;
+  recentSignals.set(key, Date.now());
+  for (const [k, t] of recentSignals.entries()) {
+    if (Date.now() - t > DEDUP_WINDOW_MS) recentSignals.delete(k);
+  }
+  return false;
+}
+
 let candidateHandler = null;
 
 export function setSignalCandidateHandler(fn) { candidateHandler = fn; }
@@ -24,6 +38,11 @@ async function processWebhookSignal({ mint: rawMint, solAmount, sourceWallet, ti
   const mint = rawMint.replace(/[^a-zA-Z0-9]/g, '');
   if (mint !== rawMint) console.log(`[signal] sanitized mint: ${rawMint} → ${mint}`);
   const sym = mint.slice(0, 8);
+
+  if (isDuplicate(mint, solAmount)) {
+    console.log(`[signal] dedup — skipping repeat signal for ${sym}`);
+    return;
+  }
 
   // 1. Validate token is still in mid-cap range
   const asset = await fetchJupiterAsset(mint).catch(() => null);
