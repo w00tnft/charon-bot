@@ -178,9 +178,70 @@ export async function fetchTokenData(mint) {
   };
 }
 
+// ── DexScreener mid-cap candidate discovery (search endpoint) ───────────────
+// Uses /latest/dex/search which includes marketCap in pair data.
+// Returns up to 100 Solana mint addresses in the $500k–$5M mcap range.
+export async function fetchTrendingMidCap() {
+  const MCAP_MIN = 500_000;
+  const MCAP_MAX = 5_000_000;
+  const LIQ_MIN  = 30_000;
+  const VOL_MIN  = 10_000;
+
+  const seen = new Set();
+
+  function parsePairs(pairs) {
+    if (!Array.isArray(pairs)) return;
+    for (const pair of pairs) {
+      if (pair.chainId !== 'solana') continue;
+      const mcap = Number(pair.marketCap || 0);
+      const liq  = Number(pair.liquidity?.usd || 0);
+      const vol  = Number(pair.volume?.h24 || 0);
+      if (mcap < MCAP_MIN || mcap > MCAP_MAX) continue;
+      if (liq < LIQ_MIN) continue;
+      if (vol < VOL_MIN) continue;
+      const mint = pair.baseToken?.address;
+      if (mint) seen.add(mint);
+    }
+  }
+
+  // Search endpoint — parallel requests, has marketCap on each pair
+  const SEARCH_TERMS = ['solana meme', 'sol token'];
+  const searchResults = await Promise.allSettled(
+    SEARCH_TERMS.map(term =>
+      axios.get(`${DEXSCREENER_BASE}/latest/dex/search`, {
+        params: { q: term },
+        timeout: 8_000,
+        headers: { Accept: 'application/json' },
+      })
+    )
+  );
+  for (const r of searchResults) {
+    if (r.status === 'fulfilled') parsePairs(r.value.data?.pairs);
+  }
+
+  // Active Solana pairs — full data including marketCap
+  try {
+    const r = await axios.get(`${DEXSCREENER_BASE}/latest/dex/pairs/solana`, {
+      timeout: 8_000,
+      headers: { Accept: 'application/json' },
+    });
+    parsePairs(r.data?.pairs);
+  } catch (err) {
+    console.log(`[tokenData] Solana pairs fetch failed: ${err.message}`);
+  }
+
+  const mints = [...seen].slice(0, 100);
+  console.log(`[tokenData] fetchTrendingMidCap: ${mints.length} mid-cap Solana token(s)`);
+  return mints;
+}
+
 // ── DexScreener trending tokens ─────────────────────────────────────────────
-// Returns array of mint addresses from boosted/trending feed
+// Returns array of mint addresses from search + boosted/profiles feed
 export async function fetchDexScreenerTrending() {
+  const midCap = await fetchTrendingMidCap().catch(() => []);
+  if (midCap.length) return midCap;
+
+  // Broad fallback — no mcap filter, just Solana tokens from boosts/profiles
   try {
     const [boostedR, profilesR] = await Promise.allSettled([
       axios.get(`${DEXSCREENER_BASE}/token-boosts/top/v1`, { timeout: 8_000 }),
@@ -188,21 +249,18 @@ export async function fetchDexScreenerTrending() {
     ]);
 
     const mints = new Set();
-
     if (boostedR.status === 'fulfilled') {
       const items = Array.isArray(boostedR.value.data) ? boostedR.value.data : [];
       for (const item of items) {
         if (item.chainId === 'solana' && item.tokenAddress) mints.add(item.tokenAddress);
       }
     }
-
     if (profilesR.status === 'fulfilled') {
       const items = Array.isArray(profilesR.value.data) ? profilesR.value.data : [];
       for (const item of items) {
         if (item.chainId === 'solana' && item.tokenAddress) mints.add(item.tokenAddress);
       }
     }
-
     return [...mints];
   } catch (err) {
     console.log(`[tokenData] DexScreener trending fetch failed: ${err.message}`);
@@ -211,28 +269,9 @@ export async function fetchDexScreenerTrending() {
 }
 
 // ── DexScreener boosted tokens (replaces Solana Tracker graduated) ───────────
-// Returns array of mint addresses for boosted Solana tokens in mid-cap range
+// Returns array of mid-cap Solana mint addresses from search endpoint
 export async function fetchSolanaTrackerGraduated() {
-  const MCAP_MIN = 500_000;
-  const MCAP_MAX = 5_000_000;
-  try {
-    const r = await axios.get(`${DEXSCREENER_BASE}/token-boosts/top/v1`, {
-      timeout: 8_000,
-      headers: { Accept: 'application/json' },
-    });
-    const items = Array.isArray(r.data) ? r.data : [];
-    return items
-      .filter(item => {
-        if (item.chainId !== 'solana') return false;
-        const mcap = Number(item.marketCap || item.fdv || 0);
-        return mcap >= MCAP_MIN && mcap <= MCAP_MAX;
-      })
-      .map(item => item.tokenAddress)
-      .filter(Boolean);
-  } catch (err) {
-    console.log(`[tokenData] DexScreener boosted fetch failed: ${err.message}`);
-    return [];
-  }
+  return fetchTrendingMidCap().catch(() => []);
 }
 
 export function clearDexCache() { dexCache.clear(); }
