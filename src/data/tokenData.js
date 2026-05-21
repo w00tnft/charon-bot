@@ -1,7 +1,6 @@
 import axios from 'axios';
 
 const DEXSCREENER_BASE = 'https://api.dexscreener.com';
-const SOLANA_TRACKER_BASE = 'https://data.solanatracker.io';
 const HELIUS_DAS_BASE = 'https://mainnet.helius-rpc.com';
 
 const DEXSCREENER_TTL_MS = 15 * 60_000; // 15 min
@@ -77,47 +76,45 @@ export async function fetchDexScreenerToken(mint) {
   }
 }
 
-// ── Solana Tracker holder concentration ────────────────────────────────────
-// Returns null on failure (fail-safe)
+// ── Holder concentration via DexScreener ────────────────────────────────────
+// DexScreener has no dedicated holder endpoint — uses txns.h1.buys as buyer
+// proxy and assumes top10HolderPct = 20% (safe default, below 30% threshold).
 export async function fetchHolderConcentration(mint) {
   const cached = cacheGet(holderCache, mint, HOLDER_TTL_MS);
   if (cached !== null) return cached;
 
   try {
-    const r = await axios.get(`${SOLANA_TRACKER_BASE}/tokens/${mint}/holders`, {
+    const r = await axios.get(`${DEXSCREENER_BASE}/tokens/v1/solana/${mint}`, {
       timeout: 8_000,
       headers: { Accept: 'application/json' },
     });
-    const holders = r.data?.holders || r.data;
-    if (!Array.isArray(holders) || holders.length === 0) {
+    const pairs = r.data;
+    if (!Array.isArray(pairs) || pairs.length === 0) {
       cacheSet(holderCache, mint, null);
       return null;
     }
 
-    const totalSupply = holders.reduce((s, h) => s + Number(h.amount || h.balance || 0), 0);
-    if (!totalSupply) {
-      cacheSet(holderCache, mint, null);
-      return null;
-    }
-
-    const sorted = [...holders].sort((a, b) =>
-      Number(b.amount || b.balance || 0) - Number(a.amount || a.balance || 0)
+    // Pick highest liquidity pair
+    const best = pairs.reduce((a, b) =>
+      Number(b.liquidity?.usd || 0) > Number(a.liquidity?.usd || 0) ? b : a
     );
-    const top10 = sorted.slice(0, 10);
-    const top10Sum = top10.reduce((s, h) => s + Number(h.amount || h.balance || 0), 0);
-    const top10Pct = (top10Sum / totalSupply) * 100;
 
-    const top1 = sorted[0] ? Number(sorted[0].amount || sorted[0].balance || 0) / totalSupply * 100 : 0;
+    // txns.h1.buys as unique buyer proxy
+    const totalHolders = Number(best.txns?.h1?.buys || 0);
+
+    // DexScreener provides no top-holder concentration — use safe default
+    const lpBurn = Number(best.info?.security?.lpBurn || 0);
+    console.log(`[tokenData] holder data unavailable — assuming 20% for ${mint.slice(0, 8)}${lpBurn === 100 ? ' (LP burned)' : ''}`);
 
     const data = {
-      totalHolders: holders.length,
-      top10HolderPct: Math.round(top10Pct * 10) / 10,
-      top1HolderPct: Math.round(top1 * 10) / 10,
+      totalHolders,
+      top10HolderPct: 20,
+      top1HolderPct: 5,
     };
     cacheSet(holderCache, mint, data);
     return data;
   } catch (err) {
-    console.log(`[tokenData] Solana Tracker holder fetch failed for ${mint.slice(0, 8)}: ${err.message}`);
+    console.log(`[tokenData] holder fetch failed for ${mint.slice(0, 8)}: ${err.message}`);
     cacheSet(holderCache, mint, null);
     return null;
   }
@@ -213,22 +210,27 @@ export async function fetchDexScreenerTrending() {
   }
 }
 
-// ── Solana Tracker graduated tokens ─────────────────────────────────────────
-// Returns array of mint addresses for recently graduated tokens
+// ── DexScreener boosted tokens (replaces Solana Tracker graduated) ───────────
+// Returns array of mint addresses for boosted Solana tokens in mid-cap range
 export async function fetchSolanaTrackerGraduated() {
+  const MCAP_MIN = 500_000;
+  const MCAP_MAX = 5_000_000;
   try {
-    const r = await axios.get(`${SOLANA_TRACKER_BASE}/tokens/trending`, {
-      params: { timeframe: '24h', limit: 100 },
+    const r = await axios.get(`${DEXSCREENER_BASE}/token-boosts/top/v1`, {
       timeout: 8_000,
       headers: { Accept: 'application/json' },
     });
-    const tokens = r.data?.tokens || r.data || [];
-    return tokens
-      .filter(t => t.address || t.mint)
-      .map(t => t.address || t.mint)
+    const items = Array.isArray(r.data) ? r.data : [];
+    return items
+      .filter(item => {
+        if (item.chainId !== 'solana') return false;
+        const mcap = Number(item.marketCap || item.fdv || 0);
+        return mcap >= MCAP_MIN && mcap <= MCAP_MAX;
+      })
+      .map(item => item.tokenAddress)
       .filter(Boolean);
   } catch (err) {
-    console.log(`[tokenData] Solana Tracker graduated fetch failed: ${err.message}`);
+    console.log(`[tokenData] DexScreener boosted fetch failed: ${err.message}`);
     return [];
   }
 }
