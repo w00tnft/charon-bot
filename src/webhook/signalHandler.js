@@ -20,7 +20,9 @@ export function attachSignalHandler() {
   console.log('[signal] Webhook signal handler attached');
 }
 
-async function processWebhookSignal({ mint, solAmount, sourceWallet, timestamp }) {
+async function processWebhookSignal({ mint: rawMint, solAmount, sourceWallet, timestamp }) {
+  const mint = rawMint.replace(/[^a-zA-Z0-9]/g, '');
+  if (mint !== rawMint) console.log(`[signal] sanitized mint: ${rawMint} → ${mint}`);
   const sym = mint.slice(0, 8);
 
   // 1. Validate token is still in mid-cap range
