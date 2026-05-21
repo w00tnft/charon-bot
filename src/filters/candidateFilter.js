@@ -3,7 +3,7 @@ import { fetchJupiterAsset } from '../enrichment/jupiter.js';
 
 // Filter thresholds — all overridable by env vars
 const MIN_LIQUIDITY_USD     = Number(process.env.FILTER_MIN_LIQUIDITY_USD     || 50_000);
-const MIN_TOKEN_AGE_HOURS   = Number(process.env.FILTER_MIN_TOKEN_AGE_HOURS   || 48);
+const MIN_TOKEN_AGE_HOURS   = Number(process.env.FILTER_MIN_TOKEN_AGE_HOURS   || 24);
 const MAX_TOP10_HOLDER_PCT  = Number(process.env.FILTER_MAX_TOP10_HOLDER_PCT  || 30);
 const MAX_DEV_WALLET_PCT    = Number(process.env.FILTER_MAX_DEV_WALLET_PCT    || 10);
 const MIN_VOLUME_MCAP_RATIO = Number(process.env.FILTER_MIN_VOLUME_MCAP_RATIO || 0.05);
