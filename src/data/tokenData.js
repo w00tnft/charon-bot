@@ -204,8 +204,11 @@ export async function fetchTrendingMidCap() {
     }
   }
 
-  // Search endpoint — 6 parallel requests, has marketCap on each pair
-  const SEARCH_TERMS = ['pepe', 'cat', 'dog', 'moon', 'ai', 'based'];
+  // Search endpoint — 8 parallel Solana-specific queries, has marketCap on each pair
+  const SEARCH_TERMS = [
+    'solana meme', 'solana cat', 'solana dog', 'solana pepe',
+    'sol token', 'solana pump', 'raydium', 'solana trending',
+  ];
   const searchResults = await Promise.all(
     SEARCH_TERMS.map(term =>
       axios.get(`${DEXSCREENER_BASE}/latest/dex/search`, {
@@ -221,9 +224,41 @@ export async function fetchTrendingMidCap() {
   for (const r of searchResults) {
     if (r) parsePairs(r.data?.pairs);
   }
+  const searchCount = seen.size;
+  console.log(`[tokenData] search results: ${searchCount} tokens`);
+
+  // Boosted tokens — actively promoted Solana tokens, fetch pair data to apply mcap filter
+  try {
+    const boostR = await axios.get(`${DEXSCREENER_BASE}/token-boosts/latest/v1`, {
+      timeout: 8_000,
+      headers: { Accept: 'application/json' },
+    });
+    const boostedAddresses = (Array.isArray(boostR.data) ? boostR.data : [])
+      .filter(item => item.chainId === 'solana' && item.tokenAddress && !seen.has(item.tokenAddress))
+      .map(item => item.tokenAddress)
+      .slice(0, 20);
+
+    if (boostedAddresses.length) {
+      const pairResults = await Promise.all(
+        boostedAddresses.map(addr =>
+          axios.get(`${DEXSCREENER_BASE}/tokens/v1/solana/${addr}`, {
+            timeout: 8_000,
+            headers: { Accept: 'application/json' },
+          }).catch(() => null)
+        )
+      );
+      for (const pr of pairResults) {
+        if (pr) parsePairs(Array.isArray(pr.data) ? pr.data : pr.data?.pairs);
+      }
+    }
+  } catch (err) {
+    console.log(`[tokenData] boosted tokens fetch failed: ${err.message}`);
+  }
+  const boostedCount = seen.size - searchCount;
+  console.log(`[tokenData] boosted tokens: ${boostedCount} tokens`);
 
   const mints = [...seen].slice(0, 100);
-  console.log(`[tokenData] fetchTrendingMidCap: ${mints.length} mid-cap Solana token(s)`);
+  console.log(`[tokenData] fetchTrendingMidCap total: ${mints.length} tokens`);
   return mints;
 }
 
