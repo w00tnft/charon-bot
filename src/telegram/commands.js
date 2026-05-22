@@ -538,7 +538,7 @@ export async function handleMessage(msg) {
   }
   if (text.startsWith('/clearpositions')) {
     const { closeStuckPositions } = await import('../db/positions.js');
-    const cleared = closeStuckPositions(0); // 0ms = close ALL open dry_run positions
+    const cleared = await closeStuckPositions(0); // 0ms = close ALL open dry_run positions
     return safeSend(chatId, `Cleared ${cleared} stuck position(s). Slots are now free.`);
   }
   if (text.startsWith('/walletlist')) return sendSmartWalletList(chatId);

@@ -427,14 +427,30 @@ export async function monitorPositions() {
     const maxHoldMs = strat?.max_hold_ms > 0 ? strat.max_hold_ms : ABSOLUTE_MAX_HOLD_MS;
     const ageMs = now() - position.opened_at_ms;
     if (ageMs >= maxHoldMs) {
+      // Fetch current price to record real PnL instead of 0
+      let pnlPct = 0;
+      let pnlSol = 0;
+      let exitClass = 'neutral';
+      try {
+        const asset = await fetchJupiterAsset(position.mint, { useCache: false }).catch(() => null);
+        const currentPrice = asset?.usdPrice ?? 0;
+        const entryPrice = Number(position.entry_price ?? 0);
+        if (currentPrice > 0 && entryPrice > 0) {
+          pnlPct = (currentPrice - entryPrice) / entryPrice * 100;
+          pnlSol = Number(position.size_sol) * pnlPct / 100;
+          exitClass = classifyExit('MAX_HOLD', pnlPct, Boolean(position.partial_tp_done));
+        }
+      } catch {
+        // fail-safe — keep 0 PnL if price fetch fails
+      }
       db.prepare(`
         UPDATE dry_run_positions
-        SET status = 'closed', closed_at_ms = ?, exit_reason = 'MAX_HOLD', pnl_percent = 0, pnl_sol = 0,
-            exit_class = 'neutral'
+        SET status = 'closed', closed_at_ms = ?, exit_reason = 'MAX_HOLD', pnl_percent = ?, pnl_sol = ?,
+            exit_class = ?
         WHERE id = ? AND status = 'open'
-      `).run(now(), position.id);
-      console.log(`[position] ${position.id} (${position.symbol || position.mint.slice(0, 8)}) MAX_HOLD force-closed after ${Math.round(ageMs / 60000)}m`);
-      await sendPositionExit({ ...position, exitReason: 'MAX_HOLD', pnlPercent: 0, pnl_percent: 0, pnlSol: 0, pnl_sol: 0 }).catch(() => {});
+      `).run(now(), pnlPct, pnlSol, exitClass, position.id);
+      console.log(`[position] ${position.id} (${position.symbol || position.mint.slice(0, 8)}) MAX_HOLD force-closed after ${Math.round(ageMs / 60000)}m — pnl: ${pnlPct.toFixed(1)}%`);
+      await sendPositionExit({ ...position, exitReason: 'MAX_HOLD', pnlPercent: pnlPct, pnl_percent: pnlPct, pnlSol, pnl_sol: pnlSol, exit_class: exitClass }).catch(() => {});
     }
   }
 

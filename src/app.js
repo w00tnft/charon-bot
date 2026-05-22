@@ -116,7 +116,7 @@ export async function startCharon() {
   }
 
   initDb();
-  closeStuckPositions(30 * 60_000);
+  await closeStuckPositions(30 * 60_000);
   seedRouteWeightOverrides();
   deduplicateLessons();
   initLiveExecution();
