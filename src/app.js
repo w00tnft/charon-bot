@@ -1,11 +1,11 @@
 import { setDefaultResultOrder } from 'node:dns';
-import { APP_NAME, SIGNAL_SERVER_URL, SIGNAL_POLL_MS, GRADUATED_POLL_MS, TRENDING_POLL_MS, POSITION_CHECK_MS, REPORT_INTERVAL_MS, SMART_MONEY_POLL_MS, SMART_MONEY_ENABLED, ACCELERATED_DRY_RUN, POSITION_PRICE_CHECK_INTERVAL_MS, BACKTEST_AUTO_RUN, DEXSCREENER_TRENDING_POLL_MS, validateConfig } from './config.js';
+import { APP_NAME, SIGNAL_SERVER_URL, SIGNAL_POLL_MS, GRADUATED_POLL_MS, TRENDING_POLL_MS, POSITION_CHECK_MS, REPORT_INTERVAL_MS, SMART_MONEY_POLL_MS, SMART_MONEY_ENABLED, ACCELERATED_DRY_RUN, POSITION_PRICE_CHECK_INTERVAL_MS, BACKTEST_AUTO_RUN, DEXSCREENER_TRENDING_POLL_MS, PUMPPORTAL_ENABLED, validateConfig } from './config.js';
 import { initDb } from './db/connection.js';
 import { db } from './db/connection.js';
 import { initLiveExecution } from './liveExecutor.js';
 import { setupTelegram } from './telegram/commands.js';
 import { monitorPositions } from './execution/positions.js';
-import { closeStuckPositions } from './db/positions.js';
+import { closeStuckPositions, recoverOpenPositions } from './db/positions.js';
 import { processCandidateFromSignals, maybeProcessDegenCandidate } from './pipeline/orchestrator.js';
 import { sendTelegram, probeTelegram } from './telegram/send.js';
 import { sendDailyReport } from './telegram/report.js';
@@ -115,8 +115,19 @@ export async function startCharon() {
     }
   }
 
+  const botStartTime = Date.now();
+  let lastHeartbeat = Date.now();
+
   initDb();
-  await closeStuckPositions(30 * 60_000);
+  const recovered = await recoverOpenPositions();
+  if (recovered.length > 0) {
+    const msg = [
+      'CHARON RESTARTED',
+      `Recovered ${recovered.length} position(s):`,
+      ...recovered.map(r => `${r.symbol}: ${r.action} ${r.pnl.toFixed(1)}% (${r.reason})`),
+    ].join('\n');
+    sendTelegram(msg).catch(() => {});
+  }
   seedRouteWeightOverrides();
   deduplicateLessons();
   initLiveExecution();
@@ -167,9 +178,13 @@ export async function startCharon() {
     const alert = (msg) => sendTelegram(msg);
     const trackDip = makeFailureTracker('dip monitor', alert);
 
-    // addInterval(() => trackServer(() => fetchServerSignals()), SIGNAL_POLL_MS);
-    // [SIGNAL POLLER] Disabled — webhook mode active
-    console.log('[SIGNAL POLLER] Disabled — webhook mode active');
+    if (process.env.SIGNAL_POLLER_ENABLED !== 'false') {
+      const trackServer = makeFailureTracker('signal server', alert);
+      addInterval(() => trackServer(() => fetchServerSignals()), SIGNAL_POLL_MS);
+      console.log('[SIGNAL POLLER] Enabled — polling thecharon.xyz');
+    } else {
+      console.log('[SIGNAL POLLER] Disabled via env');
+    }
 
     // Price monitor for dip buy strategy
     const { monitorPriceAlerts, cleanupAlerts } = await import('./signals/priceMonitor.js');
@@ -194,13 +209,18 @@ export async function startCharon() {
     startWebsocket();
   }
 
-  // [DISABLED] PumpPortal — small cap only, incompatible with mid-cap webhook strategy
-  // if (PUMPPORTAL_ENABLED) {
-  //   const { startPumpPortal, setCandidateHandler: setPumpHandler } = await import('./feeds/pumpportal.js');
-  //   setPumpHandler(processCandidateFromSignals);
-  //   startPumpPortal();
-  // }
-  console.log('[PUMPORTAL] Permanently disabled — mid-cap strategy uses Helius webhooks + DexScreener');
+  if (PUMPPORTAL_ENABLED) {
+    try {
+      const { startPumpPortal, setCandidateHandler: setPumpHandler } = await import('./feeds/pumpportal.js');
+      setPumpHandler(processCandidateFromSignals);
+      startPumpPortal();
+      console.log('[PUMPORTAL] Enabled');
+    } catch (err) {
+      console.log(`[PUMPORTAL] Failed to start: ${err.message}`);
+    }
+  } else {
+    console.log('[PUMPORTAL] Disabled via env');
+  }
 
   // Smart money wallet polling (gated — disabled by default)
   if (SMART_MONEY_ENABLED) {
@@ -217,7 +237,7 @@ export async function startCharon() {
       console.log(`[smart] FATAL import error: ${err.message}`);
     }
   } else {
-    console.log('[SMART MONEY] Disabled permanently');
+    console.log('[SMART MONEY] Disabled via env');
   }
 
   // ── PART 5b: Accelerated dry-run mode ──────────────────────────────────────
@@ -305,6 +325,29 @@ export async function startCharon() {
   addInterval(() => hourlyMaintenance().catch(err => console.log(`[maintenance] ${err.message}`)), 60 * 60 * 1000);
   hourlyMaintenance().catch(() => {});
 
-  console.log(`[CHARON] Webhook mode active — mid-cap momentum build live${ACCELERATED_DRY_RUN ? ' (ACCELERATED)' : ''}`);
+  // Heartbeat — sends status every 30min when positions open, or every 2h regardless
+  setInterval(async () => {
+    try {
+      const open = db.prepare("SELECT COUNT(*) as count FROM dry_run_positions WHERE status = 'open'").get();
+      const uptimeMs = Date.now() - botStartTime;
+      const uptimeH = Math.floor(uptimeMs / 3_600_000);
+      const uptimeM = Math.floor((uptimeMs % 3_600_000) / 60_000);
+      const hasPositions = open.count > 0;
+      const twoHoursPassed = Date.now() - lastHeartbeat > 7_200_000;
+      if (hasPositions || twoHoursPassed) {
+        await sendTelegram([
+          'CHARON HEARTBEAT',
+          `Open positions: ${open.count}`,
+          `Mode: ${process.env.TRADING_MODE || 'dry_run'}`,
+          `Uptime: ${uptimeH}h ${uptimeM}m`,
+        ].join('\n'));
+        lastHeartbeat = Date.now();
+      }
+    } catch (err) {
+      console.error('[heartbeat] error:', err.message);
+    }
+  }, 1_800_000);
+
+  console.log(`[CHARON] started — mode: ${process.env.TRADING_MODE || 'dry_run'}${ACCELERATED_DRY_RUN ? ' (ACCELERATED)' : ''}`);
   console.log(`[bot] ${APP_NAME} started`);
 }

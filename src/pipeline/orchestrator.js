@@ -33,14 +33,13 @@ export async function processCandidateFromSignals(signals) {
     return;
   }
 
-  // Run 3-layer candidate filter before expensive GMGN/Jupiter enrichment
+  // Run 3-layer candidate filter — advisory only (logs signals, does not block)
   const preFilter = await runCandidateFilter(signals.mint).catch(err => {
     console.log(`[agent] candidateFilter error for ${signals.mint.slice(0, 8)}: ${err.message} — proceeding`);
     return { passed: true, failures: [] };
   });
   if (!preFilter.passed) {
-    console.log(`[agent] ${signals.mint.slice(0, 8)} pre-filter rejected L${preFilter.layer}: ${preFilter.failures[0]}`);
-    return;
+    console.log(`[agent] ${signals.mint.slice(0, 8)} advisory filter L${preFilter.layer}: ${preFilter.failures[0]} — proceeding`);
   }
 
   const candidate = await buildCandidate(signals);

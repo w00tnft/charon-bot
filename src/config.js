@@ -43,7 +43,7 @@ export const LPAGENT_BASE_URL = 'https://api.lpagent.io/open-api/v1';
 export const REPORT_INTERVAL_MS = Number(process.env.REPORT_INTERVAL_MS || 24 * 60 * 60 * 1000);
 export const PUMPPORTAL_ENABLED = process.env.PUMPPORTAL_ENABLED !== 'false';
 export const SMART_MONEY_POLL_MS = Number(process.env.SMART_MONEY_POLL_MS || 90_000); // 90s default to avoid Helius rate limits
-export const SMART_MONEY_ENABLED = process.env.SMART_MONEY_ENABLED === 'true'; // opt-in; disabled by default
+export const SMART_MONEY_ENABLED = process.env.SMART_MONEY_ENABLED !== 'false'; // opt-out; enabled by default
 export const WEBHOOK_PUBLIC_URL = process.env.WEBHOOK_PUBLIC_URL || '';
 export const MIN_WEBHOOK_SOL_THRESHOLD = Number(process.env.MIN_WEBHOOK_SOL_THRESHOLD || 2);
 export const POOL_REFRESH_INTERVAL_MS = Number(process.env.POOL_REFRESH_INTERVAL_MS || 1_800_000);

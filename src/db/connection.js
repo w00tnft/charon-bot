@@ -466,8 +466,8 @@ export function initDb() {
   // Apply all current degen settings to existing DBs (INSERT OR IGNORE won't update them).
   const degenMigrations = {
     min_source_count: 2,
-    min_mcap_usd: 500000,
-    max_mcap_usd: 5000000,
+    min_mcap_usd: 10000,
+    max_mcap_usd: 500000,
     trending_min_volume_usd: 0,
     trending_min_swaps: 0,
     trending_max_rug_ratio: 0.5,

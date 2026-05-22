@@ -6,6 +6,67 @@ export function openPositions() {
   return db.prepare('SELECT * FROM dry_run_positions WHERE status = ? ORDER BY opened_at_ms DESC').all('open');
 }
 
+export async function recoverOpenPositions() {
+  const open = db.prepare(`SELECT * FROM dry_run_positions WHERE status = 'open'`).all();
+  if (open.length === 0) {
+    console.log('[recovery] No open positions to recover');
+    return [];
+  }
+  console.log(`[recovery] Found ${open.length} open position(s) — checking prices...`);
+
+  const { fetchJupiterAsset } = await import('../enrichment/jupiter.js');
+  const results = [];
+
+  for (const pos of open) {
+    const sym = pos.symbol || pos.mint.slice(0, 8);
+    try {
+      const asset = await fetchJupiterAsset(pos.mint, { useCache: false }).catch(() => null);
+      const currentPrice = asset?.usdPrice || null;
+
+      if (!currentPrice || !pos.entry_price) {
+        console.log(`[recovery] ${sym} — no price data, closing safely`);
+        db.prepare(`
+          UPDATE dry_run_positions
+          SET status='closed', exit_reason='RECOVERY_NO_PRICE',
+              pnl_percent=0, pnl_sol=0, exit_class='neutral', closed_at_ms=?
+          WHERE id=?
+        `).run(Date.now(), pos.id);
+        results.push({ symbol: sym, action: 'CLOSED', reason: 'no price', pnl: 0 });
+        continue;
+      }
+
+      const entryPrice = Number(pos.entry_price);
+      const pnl = (currentPrice - entryPrice) / entryPrice * 100;
+      const pnlSol = Number(pos.size_sol || 0.03) * (pnl / 100);
+
+      let exitReason = null;
+      if (pnl <= -30) exitReason = 'NUCLEAR_RECOVERY';
+      else if (pnl <= -15) exitReason = 'SL_RECOVERY';
+      else if (pnl >= 25) exitReason = 'TP_RECOVERY';
+
+      if (exitReason) {
+        const exitClass = pnl >= 25 ? 'win' : 'loss';
+        db.prepare(`
+          UPDATE dry_run_positions
+          SET status='closed', exit_reason=?,
+              pnl_percent=?, pnl_sol=?,
+              exit_price=?, exit_class=?, closed_at_ms=?
+          WHERE id=?
+        `).run(exitReason, pnl, pnlSol, currentPrice, exitClass, Date.now(), pos.id);
+        console.log(`[recovery] ${sym}: ${pnl.toFixed(1)}% → ${exitReason}`);
+        results.push({ symbol: sym, action: 'CLOSED', reason: exitReason, pnl });
+      } else {
+        console.log(`[recovery] ${sym}: ${pnl.toFixed(1)}% — keeping open`);
+        results.push({ symbol: sym, action: 'KEPT', reason: 'within range', pnl });
+      }
+    } catch (err) {
+      console.error(`[recovery] ${sym} error:`, err.message);
+      results.push({ symbol: sym, action: 'ERROR', reason: err.message, pnl: 0 });
+    }
+  }
+  return results;
+}
+
 export async function closeStuckPositions(olderThanMs = 30 * 60_000) {
   const cutoff = now() - olderThanMs;
   const stuck = db.prepare(`
