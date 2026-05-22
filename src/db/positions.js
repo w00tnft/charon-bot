@@ -6,16 +6,41 @@ export function openPositions() {
   return db.prepare('SELECT * FROM dry_run_positions WHERE status = ? ORDER BY opened_at_ms DESC').all('open');
 }
 
-export function closeStuckPositions(olderThanMs = 30 * 60_000) {
+export async function closeStuckPositions(olderThanMs = 30 * 60_000) {
   const cutoff = now() - olderThanMs;
-  const changes = db.prepare(`
-    UPDATE dry_run_positions
-    SET status = 'closed', closed_at_ms = ?, exit_reason = 'STARTUP_CLEANUP',
-        exit_class = 'neutral', pnl_percent = 0, pnl_sol = 0
+  const stuck = db.prepare(`
+    SELECT id, mint, entry_price, size_sol FROM dry_run_positions
     WHERE status = 'open' AND opened_at_ms < ?
-  `).run(now(), cutoff).changes;
-  if (changes > 0) console.log(`[startup] closed ${changes} stuck dry_run position(s) (open > ${olderThanMs / 60000}min)`);
-  return changes;
+  `).all(cutoff);
+  if (!stuck.length) return 0;
+
+  const { fetchJupiterAsset } = await import('../enrichment/jupiter.js');
+  const closeAt = now();
+  let closed = 0;
+  for (const pos of stuck) {
+    let pnlPct = 0;
+    let pnlSol = 0;
+    try {
+      const asset = await fetchJupiterAsset(pos.mint, { useCache: false }).catch(() => null);
+      const currentPrice = asset?.usdPrice ?? 0;
+      const entryPrice = Number(pos.entry_price ?? 0);
+      if (currentPrice > 0 && entryPrice > 0) {
+        pnlPct = (currentPrice - entryPrice) / entryPrice * 100;
+        pnlSol = Number(pos.size_sol) * pnlPct / 100;
+      }
+    } catch {
+      // fail-safe — keep 0 PnL if price unavailable
+    }
+    db.prepare(`
+      UPDATE dry_run_positions
+      SET status = 'closed', closed_at_ms = ?, exit_reason = 'STARTUP_CLEANUP',
+          exit_class = 'neutral', pnl_percent = ?, pnl_sol = ?
+      WHERE id = ? AND status = 'open'
+    `).run(closeAt, pnlPct, pnlSol, pos.id);
+    closed++;
+  }
+  if (closed > 0) console.log(`[startup] closed ${closed} stuck dry_run position(s) (open > ${olderThanMs / 60000}min)`);
+  return closed;
 }
 
 export function openPositionCount() {
