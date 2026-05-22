@@ -238,6 +238,81 @@ export async function handleMessage(msg) {
       'Fresh start! Learning activates at 25 closed positions.'
     );
   }
+  if (text.startsWith('/dbexport')) {
+    const rows = db.prepare(`
+      SELECT
+        symbol, pnl_percent, exit_reason,
+        signal_route, execution_mode,
+        opened_at_ms, closed_at_ms
+      FROM dry_run_positions
+      WHERE status != 'open'
+      ORDER BY opened_at_ms DESC
+      LIMIT 200
+    `).all();
+
+    if (!rows.length) return safeSend(chatId, 'No closed positions found.');
+
+    const avg = arr => arr.length
+      ? (arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(1)
+      : 'N/A';
+
+    const modes = {};
+    for (const r of rows) {
+      const m = r.execution_mode || 'unknown';
+      if (!modes[m]) modes[m] = { total: 0, wins: 0, pnl: [] };
+      modes[m].total++;
+      if (r.pnl_percent > 0) modes[m].wins++;
+      modes[m].pnl.push(r.pnl_percent);
+    }
+
+    const exits = {};
+    for (const r of rows) {
+      const e = r.exit_reason || 'unknown';
+      if (!exits[e]) exits[e] = { count: 0, pnl: [] };
+      exits[e].count++;
+      exits[e].pnl.push(r.pnl_percent);
+    }
+
+    const routes = {};
+    for (const r of rows) {
+      const rt = r.signal_route || 'unknown';
+      if (!routes[rt]) routes[rt] = { total: 0, wins: 0, pnl: [] };
+      routes[rt].total++;
+      if (r.pnl_percent > 0) routes[rt].wins++;
+      routes[rt].pnl.push(r.pnl_percent);
+    }
+
+    const worst = [...rows]
+      .sort((a, b) => a.pnl_percent - b.pnl_percent)
+      .slice(0, 5);
+
+    let msg = 'TRADE ANALYSIS\n\n';
+
+    msg += 'BY MODE:\n';
+    for (const [m, d] of Object.entries(modes)) {
+      const wr = ((d.wins / d.total) * 100).toFixed(0);
+      msg += `${m}: ${d.total} trades | ${wr}% WR | avg ${avg(d.pnl)}%\n`;
+    }
+
+    msg += '\nBY EXIT:\n';
+    for (const [e, d] of Object.entries(exits)) {
+      msg += `${e}: ${d.count}x | avg ${avg(d.pnl)}%\n`;
+    }
+
+    msg += '\nBY ROUTE:\n';
+    for (const [rt, d] of Object.entries(routes)) {
+      const wr = ((d.wins / d.total) * 100).toFixed(0);
+      msg += `${rt}: ${d.total} trades | ${wr}% WR | avg ${avg(d.pnl)}%\n`;
+    }
+
+    msg += '\nWORST 5:\n';
+    for (const r of worst) {
+      msg += `${r.symbol || '?'}: ${r.pnl_percent?.toFixed(1)}% (${r.exit_reason || '?'})\n`;
+    }
+
+    msg += `\nTotal closed: ${rows.length}`;
+    return safeSend(chatId, msg);
+  }
   if (text.startsWith('/backtest')) {
     await safeSend(chatId, 'Starting backtest... This may take 2-5 minutes.');
     try {
