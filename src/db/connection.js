@@ -436,7 +436,7 @@ export function initDb() {
     partial_exit_size: 0,
     trailing_stop_pct: 0,
     hard_stop_pct: 15,
-    emergency_stop_pct: 40,
+    emergency_stop_pct: 25,
     max_hold_ms: 14400000,
     use_llm: false,
     llm_min_confidence: 0,
@@ -480,7 +480,7 @@ export function initDb() {
     partial_exit_size: 0,
     trailing_stop_pct: 0,
     hard_stop_pct: 15,
-    emergency_stop_pct: 40,
+    emergency_stop_pct: 25,
     max_hold_ms: 14400000,
     min_safety_score: 65,
   };

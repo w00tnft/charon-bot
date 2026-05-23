@@ -1,6 +1,7 @@
 import { db } from './connection.js';
 import { now, json } from '../utils.js';
 import { numSetting, boolSetting, setting, activeStrategy } from './settings.js';
+import { toCanonicalRoute } from '../learning/weights.js';
 
 export function openPositions() {
   return db.prepare('SELECT * FROM dry_run_positions WHERE status = ? ORDER BY opened_at_ms DESC').all('open');
@@ -126,7 +127,12 @@ export function allPositions(limit = 10) {
 
 export function createDryRunPosition(candidateId, candidate, decision, reason = 'llm_buy') {
   const strat = activeStrategy();
-  const sizeSol = strat.position_size_sol ?? numSetting('dry_run_buy_sol', 0.1);
+  const baseSize = strat.position_size_sol ?? numSetting('dry_run_buy_sol', 0.1);
+  const ROUTE_SIZES = { smart_money: 0.02, dual_source: 0.03, pumpportal_survivor: 0.03, webhook: 0.03 };
+  const canonRoute = toCanonicalRoute(candidate.signals?.route);
+  const sizeSol = ROUTE_SIZES[canonRoute] ?? baseSize;
+  const sym = candidate.token?.symbol || candidate.token?.mint?.slice(0, 8) || '?';
+  console.log(`[size] $${sym} route: ${canonRoute} → ${sizeSol} SOL`);
   const entryPrice = Number(candidate.metrics.priceUsd || 0) || null;
   const entryMcap = Number(candidate.metrics.marketCapUsd || candidate.metrics.graduatedMarketCapUsd || 0) || null;
   const tp = Number(decision.suggested_tp_percent || strat.tp_percent || numSetting('default_tp_percent', 50));
