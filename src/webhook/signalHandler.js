@@ -2,6 +2,7 @@ import { webhookEmitter } from './heliusListener.js';
 import { fetchJupiterAsset } from '../enrichment/jupiter.js';
 import { openPositions } from '../db/positions.js';
 import { escapeHtml } from '../format.js';
+import { isWithinTradingHours } from '../utils/tradingHours.js';
 
 const MIN_MCAP_USD = 500_000;
 const MAX_MCAP_USD = 5_000_000;
@@ -41,6 +42,11 @@ async function processWebhookSignal({ mint: rawMint, solAmount, sourceWallet, ti
 
   if (isDuplicate(mint, solAmount)) {
     console.log(`[signal] dedup — skipping repeat signal for ${sym}`);
+    return;
+  }
+
+  if (!isWithinTradingHours()) {
+    console.log(`[hours] webhook signal ignored — outside trading window`);
     return;
   }
 

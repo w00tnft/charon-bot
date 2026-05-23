@@ -131,6 +131,7 @@ export async function startCharon() {
   seedRouteWeightOverrides();
   deduplicateLessons();
   initLiveExecution();
+  console.log('[hours] Trading windows: ' + (process.env.TRADING_HOURS_UTC || '10,11,16,18,19') + ' UTC');
 
   // ── PART 1: Start Express webhook HTTP server ──────────────────────────────
   const { startHeliusListener } = await import('./webhook/heliusListener.js');

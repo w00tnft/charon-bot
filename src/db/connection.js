@@ -437,7 +437,7 @@ export function initDb() {
     trailing_stop_pct: 0,
     hard_stop_pct: 15,
     emergency_stop_pct: 25,
-    max_hold_ms: 14400000,
+    max_hold_ms: 2_700_000,
     use_llm: false,
     llm_min_confidence: 0,
     min_safety_score: 65,
@@ -481,7 +481,7 @@ export function initDb() {
     trailing_stop_pct: 0,
     hard_stop_pct: 15,
     emergency_stop_pct: 25,
-    max_hold_ms: 14400000,
+    max_hold_ms: 2_700_000,
     min_safety_score: 65,
   };
   const degenMigrationSql = Object.entries(degenMigrations)

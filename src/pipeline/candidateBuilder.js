@@ -9,6 +9,8 @@ import { calculateSafetyScore, checkDeployerHistory } from '../safety.js';
 import { getRouteWeight, toCanonicalRoute } from '../learning/weights.js';
 import { isBlacklisted, isWhitelisted } from '../db/blacklist.js';
 import { fetchBirdeyeScore } from '../feeds/birdeye.js';
+import { isWithinTradingHours, getNextTradingWindow } from '../utils/tradingHours.js';
+import { isOnCooldown } from '../utils/mintCooldown.js';
 
 export function buildFeeSnapshot(fee, signature) {
   return {
@@ -36,6 +38,13 @@ export function filterCandidate(candidate) {
   const failures = [];
   const sym = candidate.token?.symbol || candidate.token?.mint?.slice(0, 8) || '?';
 
+  // Trading hours gate — before any other checks
+  if (!isWithinTradingHours()) {
+    const { nextHour, hoursUntil } = getNextTradingWindow();
+    console.log(`[hours] $${sym} skipped — outside trading window, next: ${nextHour}:00 UTC (in ${hoursUntil}h)`);
+    return { passed: false, failures: ['outside trading hours'], strategy: strat.id };
+  }
+
   // Blacklist checks — early return, no further enrichment needed
   const blMint = isBlacklisted(candidate.token?.mint, null);
   if (blMint) {
@@ -48,6 +57,13 @@ export function filterCandidate(candidate) {
     console.log(`[blacklist] $${sym} skipped — deployer banned`);
     return { passed: false, failures: ['blacklisted: deployer banned'], strategy: strat.id };
   }
+  // Mint cooldown — skip tokens that recently caused a loss
+  const mint = candidate.token?.mint;
+  if (mint && isOnCooldown(mint)) {
+    console.log(`[cooldown] $${sym} skipped — loss cooldown active`);
+    return { passed: false, failures: ['mint cooldown: recent loss'], strategy: strat.id };
+  }
+
   // Liquidity hard block — uses already-fetched metrics, no extra API call
   const liqUsd = candidate.metrics.liquidityUsd;
   const minLiq = Number(process.env.FILTER_MIN_LIQUIDITY_USD) || 50_000;
@@ -123,6 +139,15 @@ export function filterCandidate(candidate) {
     if (score < routeMin) {
       console.log(`[candidate] $${sym} BLOCKED — route: ${signalRoute} needs ${routeMin}, got ${score}`);
       failures.push(`safety score: ${score}/100 < route min ${routeMin} (${signalRoute})`);
+    }
+  }
+
+  // Score ceiling — filter crowded/overbought tokens
+  if (candidate.safety) {
+    const maxScore = Number(process.env.MAX_CANDIDATE_SCORE) || 65;
+    if (candidate.safety.score > maxScore) {
+      console.log(`[score] $${sym} BLOCKED — score ${candidate.safety.score} > ${maxScore} ceiling (crowded token)`);
+      failures.push(`score ceiling: ${candidate.safety.score} > ${maxScore}`);
     }
   }
 

@@ -15,6 +15,7 @@ import { sendPositionExit, sendPartialExit, sendTelegram } from '../telegram/sen
 import { blacklistToken, whitelistDeployer } from '../db/blacklist.js';
 import { escapeHtml, short } from '../format.js';
 import { autoRunLearning } from '../learning/commands.js';
+import { recordLoss } from '../utils/mintCooldown.js';
 
 export async function freshEntryMarket(mint, candidate) {
   const gmgn = await fetchGmgnTokenInfo(mint, false);
@@ -397,6 +398,11 @@ async function maybeUpdateReputation(result) {
   const deployer = extractDeployer(result);
   const pnl = result.pnl_percent ?? result.pnlPercent ?? 0;
   const symbol = result.symbol || short(result.mint);
+
+  const lossReasons = ['HARD_SL', 'SL', 'EMERGENCY_STOP', 'NUCLEAR_STOP', 'SL_RECOVERY', 'NUCLEAR_RECOVERY'];
+  if (result.exit_class === 'loss' && lossReasons.includes(result.exitReason)) {
+    recordLoss(result.mint);
+  }
 
   if (result.exit_class === 'loss' && (result.exitReason === 'HARD_SL' || result.exitReason === 'SL')) {
     blacklistToken(result.mint, deployer, pnl);
