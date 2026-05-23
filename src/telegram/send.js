@@ -192,7 +192,7 @@ export async function sendPositionOpen(positionId) {
     // Full-exit system: flat TP, no runner
     const tpPct = strat.take_profit_pct ?? 15;
     const hardPct = strat.hard_stop_pct ?? 25;
-    const emergencyPct = strat.emergency_stop_pct ?? 40;
+    const emergencyPct = strat.emergency_stop_pct ?? 25;
     const maxHoldMin = strat.max_hold_ms ? Math.round(strat.max_hold_ms / 60000) : null;
     const sizeSol = strat.position_size_sol ?? 0.05;
     lines.push(`🎯 TP: <b>+${tpPct}% full exit</b>`);

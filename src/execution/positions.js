@@ -159,7 +159,7 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
   if (strat?.exit_type === 'full') {
     const tpPct = strat.take_profit_pct ?? 15;
     const hardStopPct = Math.abs(strat.hard_stop_pct ?? 25);
-    const emergencyPct = Math.abs(strat.emergency_stop_pct ?? 40);
+    const emergencyPct = Math.abs(strat.emergency_stop_pct ?? 25);
     const maxHoldMs = strat.max_hold_ms ?? 0;
 
     db.prepare('UPDATE dry_run_positions SET high_water_mcap = ?, high_water_price = ?, pnl_percent = ? WHERE id = ?')
@@ -471,7 +471,7 @@ export async function monitorPositions() {
     // Pre-cycle emergency: fire on stored pnl before even fetching price
     if (position.execution_mode !== 'live' && lastPnl !== 0) {
       const preStrat = strategyById(position.strategy_id);
-      const preEmergencyPct = Math.abs(preStrat?.emergency_stop_pct ?? 40);
+      const preEmergencyPct = Math.abs(preStrat?.emergency_stop_pct ?? 25);
       if (lastPnl <= -preEmergencyPct) {
         db.prepare(`
           UPDATE dry_run_positions
@@ -517,7 +517,7 @@ export async function monitorPositions() {
 
       // Emergency stop using last stored PnL when price is unavailable
       if (strat?.exit_type === 'full') {
-        const emergencyPct = Math.abs(strat.emergency_stop_pct ?? 40);
+        const emergencyPct = Math.abs(strat.emergency_stop_pct ?? 25);
         const lastPnl = Number(position.pnl_percent || 0);
         if (lastPnl <= -emergencyPct) {
           db.prepare(`

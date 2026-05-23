@@ -48,6 +48,17 @@ export function filterCandidate(candidate) {
     console.log(`[blacklist] $${sym} skipped — deployer banned`);
     return { passed: false, failures: ['blacklisted: deployer banned'], strategy: strat.id };
   }
+  // Liquidity hard block — uses already-fetched metrics, no extra API call
+  const liqUsd = candidate.metrics.liquidityUsd;
+  const minLiq = Number(process.env.FILTER_MIN_LIQUIDITY_USD) || 50_000;
+  if (liqUsd > 0 && liqUsd < minLiq) {
+    console.log(`[liquidity] $${sym} BLOCKED — $${Math.round(liqUsd / 1000)}k < $${Math.round(minLiq / 1000)}k`);
+    return { passed: false, failures: [`liquidity: $${Math.round(liqUsd / 1000)}k < $${Math.round(minLiq / 1000)}k`], strategy: strat.id };
+  }
+  if (liqUsd > 0) {
+    console.log(`[liquidity] $${sym} OK — $${Math.round(liqUsd / 1000)}k`);
+  }
+
   const mcap = candidate.metrics.marketCapUsd;
   const totalFees = candidate.metrics.gmgnTotalFeesSol;
   const gradVolume = candidate.metrics.graduatedVolumeUsd;
