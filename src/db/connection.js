@@ -416,7 +416,7 @@ export function initDb() {
     require_fee_claim: false,
     token_age_max_ms: 3600000,
     min_mcap_usd: 500000,
-    max_mcap_usd: 5000000,
+    max_mcap_usd: 700000,
     min_fee_claim_sol: 0,
     min_gmgn_total_fee_sol: 0,
     min_holders: 0,
@@ -467,7 +467,7 @@ export function initDb() {
   const degenMigrations = {
     min_source_count: 2,
     min_mcap_usd: 10000,
-    max_mcap_usd: 500000,
+    max_mcap_usd: 700000,
     trending_min_volume_usd: 0,
     trending_min_swaps: 0,
     trending_max_rug_ratio: 0.5,
