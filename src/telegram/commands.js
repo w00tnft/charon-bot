@@ -308,6 +308,35 @@ export async function handleMessage(msg) {
       msg += `\nTRAIL BONUS vs TP (+${fixedTpPct}%): ${bonus > 0 ? '+' : ''}${bonus}% avg extra captured\n`;
     }
 
+    // Cost simulation analysis
+    const costRows2 = db.prepare(`
+      SELECT exit_reason, entry_slippage_pct, exit_slippage_pct, gas_cost_sol, exit_gas_sol, gross_pnl_pct, net_pnl_pct
+      FROM dry_run_positions WHERE status != 'open' AND gross_pnl_pct != 0
+    `).all();
+    if (costRows2.length > 0) {
+      const avgES = costRows2.reduce((s, r) => s + Number(r.entry_slippage_pct || 0), 0) / costRows2.length;
+      const avgXS = costRows2.reduce((s, r) => s + Number(r.exit_slippage_pct || 0), 0) / costRows2.length;
+      const totalG = costRows2.reduce((s, r) => s + Number(r.gas_cost_sol || 0) + Number(r.exit_gas_sol || 0), 0);
+      const avgGross = costRows2.reduce((s, r) => s + Number(r.gross_pnl_pct || 0), 0) / costRows2.length;
+      const avgNet   = costRows2.reduce((s, r) => s + Number(r.net_pnl_pct || 0), 0) / costRows2.length;
+      const drag = avgES + avgXS + (totalG / costRows2.length / 0.03 * 100);
+      msg += '\nCOST ANALYSIS:\n';
+      msg += `Avg entry slip: ${avgES.toFixed(2)}% | Avg exit slip: ${avgXS.toFixed(2)}%\n`;
+      msg += `Total gas: ${totalG.toFixed(4)} SOL | Avg drag: ~${drag.toFixed(2)}% per trade\n`;
+      msg += `GROSS avg: ${avg(costRows2.map(r => r.gross_pnl_pct))}% → NET avg: ${avg(costRows2.map(r => r.net_pnl_pct))}%\n`;
+      // Per exit type slip
+      const slipByExit = {};
+      for (const r of costRows2) {
+        const k = r.exit_reason || 'unknown';
+        if (!slipByExit[k]) slipByExit[k] = [];
+        slipByExit[k].push(Number(r.exit_slippage_pct || 0));
+      }
+      msg += '\nSlippage by exit:\n';
+      for (const [k, vals] of Object.entries(slipByExit)) {
+        msg += `${k}: ${avg(vals)}% avg exit slip\n`;
+      }
+    }
+
     msg += '\nBY ROUTE:\n';
     for (const [rt, d] of Object.entries(routes)) {
       const wr = ((d.wins / d.total) * 100).toFixed(0);
@@ -866,6 +895,25 @@ export async function sendPnl(chatId, query = null) {
     `PnL SOL: <b>${pivotStats.totalSol >= 0 ? '+' : ''}${fmtSol(pivotStats.totalSol)} SOL</b>`,
   ] : [];
 
+  // Cost simulation breakdown (only shown when data exists)
+  const costRows = db.prepare(`
+    SELECT entry_slippage_pct, exit_slippage_pct, gas_cost_sol, exit_gas_sol, gross_pnl_pct, net_pnl_pct
+    FROM dry_run_positions WHERE status = 'closed' AND gross_pnl_pct != 0
+  `).all();
+  const hasCostData = costRows.length > 0;
+  const avgEntrySlip = hasCostData ? costRows.reduce((s, r) => s + Number(r.entry_slippage_pct || 0), 0) / costRows.length : 0;
+  const avgExitSlip  = hasCostData ? costRows.reduce((s, r) => s + Number(r.exit_slippage_pct || 0), 0) / costRows.length : 0;
+  const totalGasSol  = hasCostData ? costRows.reduce((s, r) => s + Number(r.gas_cost_sol || 0) + Number(r.exit_gas_sol || 0), 0) : 0;
+  const avgGrossPnl  = hasCostData ? costRows.reduce((s, r) => s + Number(r.gross_pnl_pct || 0), 0) / costRows.length : null;
+  const avgNetPnl    = hasCostData ? costRows.reduce((s, r) => s + Number(r.net_pnl_pct || 0), 0) / costRows.length : null;
+  const costSection = hasCostData ? [
+    '',
+    '<b>COSTS (sim)</b>',
+    `Avg entry slip: <b>${avgEntrySlip.toFixed(2)}%</b> | Avg exit slip: <b>${avgExitSlip.toFixed(2)}%</b>`,
+    `Total gas paid: <b>${totalGasSol.toFixed(4)} SOL</b>`,
+    `Gross avg PnL: <b>${avgGrossPnl !== null ? fmtPct(avgGrossPnl) : '—'}</b> → NET: <b>${avgNetPnl !== null ? fmtPct(avgNetPnl) : '—'}</b>`,
+  ] : [];
+
   const lines = [
     '📊 <b>PnL</b>',
     '',
@@ -876,6 +924,7 @@ export async function sendPnl(chatId, query = null) {
     `✅ Wins: <b>${wins.length}</b> (${pct(wins.length)}) · ⚖️ Neutral: <b>${neutrals.length}</b> (${pct(neutrals.length)}) · ❌ Losses: <b>${losses.length}</b> (${pct(losses.length)})`,
     `Net score: <b>${net > 0 ? '+' : ''}${net}</b> ${netIcon}`,
     ...pivotSection,
+    ...costSection,
     '',
     '<b>By route:</b>',
     ...routeLines,

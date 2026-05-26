@@ -125,6 +125,20 @@ export function allPositions(limit = 10) {
   return db.prepare('SELECT * FROM dry_run_positions ORDER BY id DESC LIMIT ?').all(limit);
 }
 
+function calcEntrySimCosts(liquidityUsd, sizeSol) {
+  const GAS_SOL = 0.000005;
+  const PRIORITY_FEE_SOL = Number(process.env.PRIORITY_FEE_LAMPORTS || 50000) / 1e9;
+  const gasCostSol = GAS_SOL + PRIORITY_FEE_SOL;
+  const effectiveSizeSol = Math.max(0, sizeSol - gasCostSol);
+  if (process.env.SIMULATE_COSTS === 'false') return { entrySlippagePct: 0, gasCostSol, effectiveSizeSol };
+  const liq = liquidityUsd > 0 ? liquidityUsd : 100_000;
+  const sizeUsd = sizeSol * 150;
+  const priceImpact = (sizeUsd / liq) * 100;
+  const mevImpact = liq < 50_000 ? Math.random() * 1.5 : Math.random() * 0.3;
+  const entrySlippagePct = Math.min(priceImpact + mevImpact, 3.0);
+  return { entrySlippagePct, gasCostSol, effectiveSizeSol };
+}
+
 export function createDryRunPosition(candidateId, candidate, decision, reason = 'llm_buy') {
   const strat = activeStrategy();
   const baseSize = strat.position_size_sol ?? numSetting('dry_run_buy_sol', 0.1);
@@ -139,6 +153,8 @@ export function createDryRunPosition(candidateId, candidate, decision, reason = 
   const sl = Number(decision.suggested_sl_percent || strat.sl_percent || numSetting('default_sl_percent', -25));
   const trailingEnabled = (strat.trailing_enabled ?? boolSetting('default_trailing_enabled', true)) ? 1 : 0;
   const trailingPercent = strat.trailing_percent ?? numSetting('default_trailing_percent', 20);
+  const liqUsd = Number(candidate.metrics?.liquidityUsd || 0);
+  const { entrySlippagePct, gasCostSol, effectiveSizeSol } = calcEntrySimCosts(liqUsd, sizeSol);
 
   return db.transaction(() => {
     const existing = db.prepare(`
@@ -151,8 +167,9 @@ export function createDryRunPosition(candidateId, candidate, decision, reason = 
       INSERT INTO dry_run_positions (
         candidate_id, mint, symbol, status, opened_at_ms, size_sol, entry_price, entry_mcap,
         token_amount_est, high_water_price, high_water_mcap, tp_percent, sl_percent,
-        trailing_enabled, trailing_percent, trailing_armed, llm_decision_id, strategy_id, signal_route, snapshot_json
-      ) VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+        trailing_enabled, trailing_percent, trailing_armed, llm_decision_id, strategy_id, signal_route,
+        entry_slippage_pct, gas_cost_sol, effective_position_sol, snapshot_json
+      ) VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       candidateId,
       candidate.token.mint,
@@ -171,8 +188,12 @@ export function createDryRunPosition(candidateId, candidate, decision, reason = 
       decision.id || null,
       strat.id,
       signalRoute,
+      entrySlippagePct,
+      gasCostSol,
+      effectiveSizeSol,
       json({ candidate, decision, reason, strategy: strat.id }),
     );
+    console.log(`[sim] $${sym} entry — slip: ${entrySlippagePct.toFixed(2)}% gas: ${gasCostSol.toFixed(6)} SOL effective: ${effectiveSizeSol.toFixed(4)} SOL`);
     const positionId = Number(result.lastInsertRowid);
     db.prepare(`
       INSERT INTO dry_run_trades (position_id, mint, side, at_ms, price, mcap, size_sol, token_amount_est, reason, payload_json)
