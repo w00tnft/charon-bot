@@ -571,6 +571,24 @@ export function initDb() {
       console.log('[pivot] Set PIVOT_CLEAN=false in Railway to prevent re-running');
     }
   }
+
+  // ── FULL_RESET migration — wipes all trade/lesson data, keeps blacklist ──
+  if (process.env.FULL_RESET === 'true') {
+    console.log('[reset] FULL_RESET=true — wiping trade history and learned lessons...');
+    db.transaction(() => {
+      db.prepare('DELETE FROM dry_run_positions').run();
+      db.prepare('DELETE FROM dry_run_trades').run();
+      db.prepare('DELETE FROM capital_snapshots').run();
+      db.prepare('DELETE FROM tp_sl_rules').run();
+      db.prepare('DELETE FROM learning_lessons').run();
+      db.prepare('DELETE FROM route_weights').run();
+      db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES ('starting_capital_sol', ?)`)
+        .run(process.env.DRY_RUN_STARTING_BALANCE || '1');
+      db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES ('last_auto_learn_count', '0')`).run();
+    })();
+    console.log('[reset] Full reset complete — blacklist and settings preserved');
+    console.log('[reset] Set FULL_RESET=false after deploy');
+  }
 }
 
 export function ensureColumn(table, column, ddl) {

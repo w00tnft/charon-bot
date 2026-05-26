@@ -2,17 +2,21 @@ import { db } from '../db/connection.js';
 import { now } from '../utils.js';
 
 const LESSON_OVERRIDES = {
-  fee_graduated_trending: 0.3,   // avoid — -3.8% avg PnL
-  fee_trending:           1.2,   // +6.2% avg PnL — boosted
-  fee_graduated:          1.1,   // reliable dual-source
-  graduated_trending:     0.1,   // historically poor — small-cap lesson restored
+  // Proven winners — keep boost
+  pumpportal_survivor:    1.3,   // proven from 222 trades
+  fee_trending:           1.2,   // +6.2% avg PnL — consistent performer
+  fee_graduated:          1.1,   // slight edge
+  // Neutral — let auto-tuner learn fresh
   fee_claim:              1.0,
   graduated:              1.0,
   trending:               1.0,
-  single_source:          1.0,   // neutral
-  dual_source:            1.1,   // +0.8% avg PnL — slight boost
-  pumpportal_survivor:    1.3,   // tuned from 222 trades — restored
-  webhook:                1.2,   // Helius real-time signals — slight boost
+  single_source:          1.0,
+  // Historically poor
+  fee_graduated_trending: 0.3,   // avoid — -3.8% avg PnL
+  graduated_trending:     0.1,   // historically bad
+  // Disabled — set to 0 so they never score
+  dual_source:            0.0,
+  webhook:                0.0,
 };
 
 export function toCanonicalRoute(route) {
@@ -122,6 +126,16 @@ export function allRouteWeights() {
 }
 
 export function seedRouteWeightOverrides() {
+  if (process.env.RESET_LESSONS === 'true') {
+    const KEEP_ROUTES = ['pumpportal_survivor', 'fee_trending', 'fee_graduated'];
+    db.prepare('DELETE FROM learning_lessons').run();
+    db.prepare(
+      `DELETE FROM route_weights WHERE route NOT IN (${KEEP_ROUTES.map(() => '?').join(',')})`
+    ).run(...KEEP_ROUTES);
+    console.log('[weights] RESET_LESSONS=true — lessons wiped, keeping proven routes');
+    console.log('[weights] Set RESET_LESSONS=false after deploy');
+  }
+
   const upsert = db.prepare(`
     INSERT INTO route_weights (route, win_count, loss_count, avg_pnl_pct, weight, updated_at_ms)
     VALUES (?, 0, 0, 0, ?, ?)

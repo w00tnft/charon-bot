@@ -248,7 +248,7 @@ export async function handleMessage(msg) {
       WHERE status != 'open'
       AND (source != 'backtest' OR source IS NULL)
       ORDER BY opened_at_ms DESC
-      LIMIT 200
+      LIMIT 1000
     `).all();
 
     if (!rows.length) return safeSend(chatId, 'No closed positions found.');

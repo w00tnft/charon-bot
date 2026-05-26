@@ -36,6 +36,10 @@ export function attachSignalHandler() {
 }
 
 async function processWebhookSignal({ mint: rawMint, solAmount, sourceWallet, timestamp }) {
+  if (process.env.WEBHOOK_MOMENTUM_ENABLED === 'false') {
+    return; // webhook feeds arb only
+  }
+
   const mint = rawMint.replace(/[^a-zA-Z0-9]/g, '');
   if (mint !== rawMint) console.log(`[signal] sanitized mint: ${rawMint} → ${mint}`);
   const sym = mint.slice(0, 8);

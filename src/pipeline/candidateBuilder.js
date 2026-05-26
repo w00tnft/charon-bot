@@ -64,6 +64,15 @@ export function filterCandidate(candidate) {
     return { passed: false, failures: ['mint cooldown: recent loss'], strategy: strat.id };
   }
 
+  // Permanently disabled routes — set DISABLED_ROUTES env to override
+  const DISABLED_ROUTES = (process.env.DISABLED_ROUTES || 'dual_source,webhook')
+    .split(',').map(r => r.trim()).filter(Boolean);
+  const signalRouteRaw = toCanonicalRoute(candidate.signals?.route);
+  if (DISABLED_ROUTES.includes(signalRouteRaw)) {
+    console.log(`[route] $${sym} DISABLED route: ${signalRouteRaw}`);
+    return { passed: false, failures: [`disabled route: ${signalRouteRaw}`], strategy: strat.id };
+  }
+
   // Liquidity hard block — uses already-fetched metrics, no extra API call
   const liqUsd = candidate.metrics.liquidityUsd;
   const minLiq = Number(process.env.FILTER_MIN_LIQUIDITY_USD) || 50_000;
