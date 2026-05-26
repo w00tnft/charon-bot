@@ -246,6 +246,7 @@ export async function handleMessage(msg) {
         opened_at_ms, closed_at_ms
       FROM dry_run_positions
       WHERE status != 'open'
+      AND (source != 'backtest' OR source IS NULL)
       ORDER BY opened_at_ms DESC
       LIMIT 200
     `).all();
@@ -311,7 +312,7 @@ export async function handleMessage(msg) {
     // Cost simulation analysis
     const costRows2 = db.prepare(`
       SELECT exit_reason, entry_slippage_pct, exit_slippage_pct, gas_cost_sol, exit_gas_sol, gross_pnl_pct, net_pnl_pct
-      FROM dry_run_positions WHERE status != 'open' AND gross_pnl_pct != 0
+      FROM dry_run_positions WHERE status != 'open' AND gross_pnl_pct != 0 AND (source != 'backtest' OR source IS NULL)
     `).all();
     if (costRows2.length > 0) {
       const avgES = costRows2.reduce((s, r) => s + Number(r.entry_slippage_pct || 0), 0) / costRows2.length;
@@ -381,20 +382,20 @@ export async function handleMessage(msg) {
         SUM(CASE WHEN exit_class = 'neutral' THEN 1 ELSE 0 END) AS neutrals,
         ROUND(AVG(pnl_percent), 2) AS avg_pnl,
         COALESCE(SUM(pnl_sol), 0) AS total_pnl_sol
-      FROM dry_run_positions WHERE status = 'closed' AND source != 'backtest'
+      FROM dry_run_positions WHERE status = 'closed' AND (source != 'backtest' OR source IS NULL)
     `).get();
 
     const stats24h = db.prepare(`
       SELECT COUNT(*) AS total,
         SUM(CASE WHEN exit_class = 'win' THEN 1 ELSE 0 END) AS wins,
         ROUND(AVG(pnl_percent), 2) AS avg_pnl
-      FROM dry_run_positions WHERE status = 'closed' AND closed_at_ms > ? AND source != 'backtest'
+      FROM dry_run_positions WHERE status = 'closed' AND closed_at_ms > ? AND (source != 'backtest' OR source IS NULL)
     `).get(dayAgo);
 
     const statsWeek = db.prepare(`
       SELECT COUNT(*) AS total,
         SUM(CASE WHEN exit_class = 'win' THEN 1 ELSE 0 END) AS wins
-      FROM dry_run_positions WHERE status = 'closed' AND closed_at_ms > ? AND source != 'backtest'
+      FROM dry_run_positions WHERE status = 'closed' AND closed_at_ms > ? AND (source != 'backtest' OR source IS NULL)
     `).get(weekAgo);
 
     const statsPivot = pivot ? db.prepare(`
@@ -404,7 +405,7 @@ export async function handleMessage(msg) {
         SUM(CASE WHEN exit_class = 'neutral' THEN 1 ELSE 0 END) AS neutrals,
         ROUND(AVG(pnl_percent), 2) AS avg_pnl,
         COALESCE(SUM(pnl_sol), 0) AS total_pnl_sol
-      FROM dry_run_positions WHERE status = 'closed' AND source != 'backtest' AND closed_at_ms > ?
+      FROM dry_run_positions WHERE status = 'closed' AND (source != 'backtest' OR source IS NULL) AND closed_at_ms > ?
     `).get(pivot) : null;
 
     const totalTrades = statsAll?.total || 0;
@@ -419,7 +420,7 @@ export async function handleMessage(msg) {
         SUM(CASE WHEN exit_class = 'win' THEN 1 ELSE 0 END) AS w,
         ROUND(AVG(pnl_percent), 1) AS avg_pnl
       FROM dry_run_positions
-      WHERE status = 'closed' AND source != 'backtest' AND signal_route IS NOT NULL
+      WHERE status = 'closed' AND (source != 'backtest' OR source IS NULL) AND signal_route IS NOT NULL
       GROUP BY signal_route ORDER BY c DESC LIMIT 5
     `).all();
 
@@ -516,21 +517,21 @@ export async function handleMessage(msg) {
         SUM(CASE WHEN exit_class = 'win' THEN 1 ELSE 0 END) AS wins,
         ROUND(AVG(pnl_percent), 2) AS avg_pnl,
         COALESCE(SUM(pnl_sol), 0) AS total_pnl
-      FROM dry_run_positions WHERE status = 'closed' AND source != 'backtest'
+      FROM dry_run_positions WHERE status = 'closed' AND (source != 'backtest' OR source IS NULL)
     `).get();
 
     const recentStats = db.prepare(`
       SELECT COUNT(*) AS total,
         SUM(CASE WHEN exit_class = 'win' THEN 1 ELSE 0 END) AS wins
       FROM (SELECT exit_class FROM dry_run_positions
-        WHERE status = 'closed' AND source != 'backtest'
+        WHERE status = 'closed' AND (source != 'backtest' OR source IS NULL)
         ORDER BY closed_at_ms DESC LIMIT 20)
     `).get();
 
     const weeklyRate = db.prepare(`
       SELECT COUNT(*) AS total
       FROM dry_run_positions
-      WHERE status = 'closed' AND source != 'backtest'
+      WHERE status = 'closed' AND (source != 'backtest' OR source IS NULL)
         AND closed_at_ms > ?
     `).get(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
@@ -807,7 +808,7 @@ export async function sendBlacklistReport(chatId) {
 }
 
 export async function sendSummary(chatId) {
-  const closed = db.prepare("SELECT * FROM dry_run_positions WHERE status = 'closed' ORDER BY pnl_percent DESC").all();
+  const closed = db.prepare("SELECT * FROM dry_run_positions WHERE status = 'closed' AND (source != 'backtest' OR source IS NULL) ORDER BY pnl_percent DESC").all();
   if (!closed.length) {
     return bot.sendMessage(chatId, '📊 <b>Summary</b>\n\nNo closed positions yet.', { parse_mode: 'HTML' });
   }
@@ -844,7 +845,7 @@ export async function sendSummary(chatId) {
 export async function sendPnl(chatId, query = null) {
   const pivot = pivotMs();
   const startingSol = numSetting('starting_capital_sol', 1.0);
-  const closed = db.prepare("SELECT pnl_percent, pnl_sol, exit_class, snapshot_json, closed_at_ms FROM dry_run_positions WHERE status = 'closed'").all();
+  const closed = db.prepare("SELECT pnl_percent, pnl_sol, exit_class, snapshot_json, closed_at_ms FROM dry_run_positions WHERE status = 'closed' AND (source != 'backtest' OR source IS NULL)").all();
   if (!closed.length) {
     const text = `PNL\n\nNo closed positions yet.\nStarting balance: ${fmtSol(startingSol)} SOL`;
     return query ? editMenuMessage(query, text, navKeyboard()) : safeSend(chatId, text);
