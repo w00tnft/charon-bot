@@ -218,6 +218,15 @@ export async function sendPositionOpen(positionId) {
     lines.push(`🛑 Stop Loss: <b>${position.sl_percent}%</b>`);
   }
 
+  // Sim costs (dry-run only)
+  const entrySlip = Number(position.entry_slippage_pct || 0);
+  const gasCost = Number(position.gas_cost_sol || 0);
+  const effectiveSol = Number(position.effective_position_sol || 0);
+  if (isDryRun && entrySlip > 0) {
+    lines.push('');
+    lines.push(`🔬 <b>Sim costs:</b> slip: ${entrySlip.toFixed(2)}% | gas: ${gasCost.toFixed(6)} SOL | eff: ${effectiveSol.toFixed(4)} SOL`);
+  }
+
   const gmgnUrl = token.gmgnUrl || gmgnLink(position.mint);
   const twitterHandle = token.twitter ? token.twitter.replace(/^@/, '') : null;
   const buttons = [[{ text: '📈 Chart', url: gmgnUrl }]];
@@ -317,6 +326,44 @@ export async function sendPositionExit(position) {
       `📋 CA: <code>${position.mint}</code>`,
       `💸 PnL: <b>${fmtPct(position.pnl_percent ?? position.pnlPercent)}</b>`,
     ];
+    await sendTelegram(lines.join('\n'));
+    return;
+  }
+
+  // For dry-run exits, append cost breakdown if simulation data exists
+  const isDryRun = position.execution_mode !== 'live';
+  const grossPnl = Number(position.gross_pnl_pct ?? position.pnl_percent ?? position.pnlPercent ?? 0);
+  const netPnl = Number(position.net_pnl_pct ?? grossPnl);
+  const entrySlip = Number(position.entry_slippage_pct || 0);
+  const exitSlip = Number(position.exit_slippage_pct || 0);
+  const exitGas = Number(position.exit_gas_sol || 0);
+  const posSize = Number(position.size_sol || 0.03);
+  const hasCosts = isDryRun && (entrySlip > 0 || exitSlip > 0 || exitGas > 0);
+
+  if (hasCosts) {
+    const gasCostPct = posSize > 0 ? (exitGas / posSize) * 100 : 0;
+    const holdMs = position.closed_at_ms && position.opened_at_ms
+      ? Number(position.closed_at_ms) - Number(position.opened_at_ms)
+      : 0;
+    const holdMin = holdMs > 0 ? Math.round(holdMs / 60000) : null;
+    const symbol = escapeHtml(position.symbol || short(position.mint));
+    const lines = [
+      `🏁 <b>${clsPrefix} — ${escapeHtml(reason)} (${label})</b>`,
+      '',
+      `🪙 <b>$${symbol}</b>  <code>${position.mint}</code>`,
+      '',
+      `📥 Entry:          <b>${Number(position.entry_price || 0) > 0 ? '$' + Number(position.entry_price).toFixed(6) : '?'}</b>`,
+      `📤 Exit:           <b>${Number(position.exit_price || 0) > 0 ? '$' + Number(position.exit_price).toFixed(6) : '?'}</b>`,
+      '',
+      `📊 Gross PnL:      <b>${fmtPct(grossPnl)}</b>`,
+      `📉 Entry slip:     <b>−${entrySlip.toFixed(2)}%</b>`,
+      `📉 Exit slip:      <b>−${exitSlip.toFixed(2)}%</b>`,
+      `⛽ Gas (2 txns):   <b>−${gasCostPct.toFixed(2)}%</b>`,
+      '──────────────────────────',
+      `💰 NET PnL:        <b>${fmtPct(netPnl)}</b>`,
+      `💎 NET SOL:        <b>${(posSize * netPnl / 100 >= 0 ? '+' : '') + (posSize * netPnl / 100).toFixed(4)} SOL</b>`,
+      holdMin ? `⏱️ Hold: <b>${holdMin}m</b>` : null,
+    ].filter(Boolean);
     await sendTelegram(lines.join('\n'));
     return;
   }

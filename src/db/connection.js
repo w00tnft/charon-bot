@@ -259,6 +259,14 @@ export function initDb() {
   ensureColumn('dry_run_positions', 'trail_active', 'INTEGER DEFAULT 0');
   ensureColumn('dry_run_positions', 'trail_peak_price', 'REAL DEFAULT NULL');
   ensureColumn('dry_run_positions', 'trail_activated_at_ms', 'INTEGER DEFAULT NULL');
+  ensureColumn('dry_run_positions', 'entry_slippage_pct', 'REAL DEFAULT 0');
+  ensureColumn('dry_run_positions', 'exit_slippage_pct', 'REAL DEFAULT 0');
+  ensureColumn('dry_run_positions', 'gas_cost_sol', 'REAL DEFAULT 0');
+  ensureColumn('dry_run_positions', 'effective_position_sol', 'REAL DEFAULT 0.03');
+  ensureColumn('dry_run_positions', 'gross_pnl_pct', 'REAL DEFAULT 0');
+  ensureColumn('dry_run_positions', 'net_pnl_pct', 'REAL DEFAULT 0');
+  ensureColumn('dry_run_positions', 'exit_gas_sol', 'REAL DEFAULT 0');
+  ensureColumn('dry_run_positions', 'liquidity_at_exit', 'REAL DEFAULT 0');
   ensureColumn('decision_logs', 'strategy_id', 'TEXT');
 
   const weightInsert = db.prepare('INSERT OR IGNORE INTO route_weights (route, win_count, loss_count, avg_pnl_pct, weight, updated_at_ms) VALUES (?, 0, 0, 0, 1.0, ?)');

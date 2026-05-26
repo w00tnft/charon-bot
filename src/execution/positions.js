@@ -132,6 +132,18 @@ async function doLiveSell(position, reason, price, mcap) {
   }
 }
 
+const PANIC_EXIT_REASONS = new Set(['HARD_SL', 'EMERGENCY_STOP', 'NUCLEAR_STOP', 'SL_RECOVERY', 'NUCLEAR_RECOVERY', 'LIQUIDITY_EMERGENCY']);
+
+function simulateExitSlippage(liquidityUsd, sizeSol, exitReason) {
+  if (process.env.SIMULATE_COSTS === 'false') return 0;
+  const liq = liquidityUsd > 0 ? liquidityUsd : 100_000;
+  const sizeUsd = sizeSol * 150;
+  const baseImpact = (sizeUsd / liq) * 100;
+  const panic = PANIC_EXIT_REASONS.has(exitReason) ? 2.5 : 1.2;
+  const mevImpact = liq < 50_000 ? Math.random() * 2.0 : Math.random() * 0.5;
+  return Math.min((baseImpact * panic) + mevImpact, 5.0);
+}
+
 export async function refreshPosition(position, { autoExit = true, jupiterPnl = null } = {}) {
   const asset = await fetchJupiterAsset(position.mint);
   // Only use live Jupiter mcap for PnL — never fall back to stored values.
@@ -155,6 +167,26 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
   let exitReason = null;
   let closed = false;
   let partialFired = false;
+  let netPnlPct = pnlPercent;
+  let grossPnlPct = pnlPercent;
+  let exitSlippagePct = 0;
+  let exitGasSol = 0;
+  let liquidityAtExit = 0;
+
+  // ── Liquidity emergency check ──────────────────────────────────────────────
+  if (position.execution_mode !== 'live') {
+    const currentLiq = Number(asset?.liquidity || 0);
+    liquidityAtExit = currentLiq;
+    const liqEmergency = Number(process.env.LIQUIDITY_EMERGENCY_USD) || 10_000;
+    const liqWarning = Number(process.env.LIQUIDITY_WARNING_USD) || 20_000;
+    const sym = position.symbol || position.mint.slice(0, 8);
+    if (currentLiq > 0 && currentLiq < liqEmergency) {
+      console.log(`[liquidity] $${sym} EMERGENCY — dropped to $${Math.round(currentLiq / 1000)}k — force closing`);
+      exitReason = 'LIQUIDITY_EMERGENCY';
+    } else if (currentLiq > 0 && currentLiq < liqWarning) {
+      console.log(`[liquidity] $${sym} WARNING — low at $${Math.round(currentLiq / 1000)}k`);
+    }
+  }
 
   // ── Full-exit system (degen: TP at flat %, no runner) ─────────────────────
   if (strat?.exit_type === 'full') {
@@ -351,18 +383,35 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
       json({ pnlPercent: finalPnlPercent, pnlSol: finalPnlSol, receivedSol: receivedSol ?? null, sell }));
     closed = true;
   } else if (exitReason && autoExit) {
+    // Simulate exit costs for dry-run positions
+    const GAS_SOL_BASE = 0.000005;
+    const PRIORITY_FEE_SOL = Number(process.env.PRIORITY_FEE_LAMPORTS || 50000) / 1e9;
+    exitGasSol = GAS_SOL_BASE + PRIORITY_FEE_SOL;
+    const currentLiq = liquidityAtExit > 0 ? liquidityAtExit : Number(asset?.liquidity || 0);
+    exitSlippagePct = simulateExitSlippage(currentLiq, Number(position.size_sol), exitReason);
+    const gasCostPct = (exitGasSol / Number(position.size_sol)) * 100;
+    const entrySlipPct = Number(position.entry_slippage_pct || 0);
+    grossPnlPct = pnlPercent;
+    netPnlPct = grossPnlPct - entrySlipPct - exitSlippagePct - gasCostPct;
+    const netPnlSol = Number(position.size_sol) * netPnlPct / 100;
+    const sym = position.symbol || position.mint.slice(0, 8);
+    console.log(`[sim] $${sym} exit — gross: ${grossPnlPct.toFixed(2)}% | entry slip: -${entrySlipPct.toFixed(2)}% | exit slip: -${exitSlippagePct.toFixed(2)}% | gas: -${gasCostPct.toFixed(2)}% | NET: ${netPnlPct.toFixed(2)}%`);
+    finalPnlPercent = pnlPercent; // keep gross in pnl_percent for compatibility
+    finalPnlSol = pnlSol;
     const dryExitClass = classifyExit(exitReason, pnlPercent, Boolean(position.partial_tp_done) || partialFired);
     db.prepare(`
       UPDATE dry_run_positions
       SET status = 'closed', closed_at_ms = ?, exit_price = ?, exit_mcap = ?, exit_reason = ?,
-          pnl_percent = ?, pnl_sol = ?, exit_class = ?
+          pnl_percent = ?, pnl_sol = ?, exit_class = ?,
+          gross_pnl_pct = ?, net_pnl_pct = ?, exit_slippage_pct = ?, exit_gas_sol = ?, liquidity_at_exit = ?
       WHERE id = ?
-    `).run(now(), price, mcap, exitReason, pnlPercent, pnlSol, dryExitClass, position.id);
+    `).run(now(), price, mcap, exitReason, pnlPercent, pnlSol, dryExitClass,
+           grossPnlPct, netPnlPct, exitSlippagePct, exitGasSol, currentLiq, position.id);
     db.prepare(`
       INSERT INTO dry_run_trades (position_id, mint, side, at_ms, price, mcap, size_sol, token_amount_est, reason, payload_json)
       VALUES (?, ?, 'sell', ?, ?, ?, ?, ?, ?, ?)
     `).run(position.id, position.mint, now(), price, mcap, position.size_sol, position.token_amount_est, exitReason,
-      json({ pnlPercent, pnlSol }));
+      json({ pnlPercent, pnlSol, grossPnlPct, netPnlPct, exitSlippagePct, exitGasSol }));
     closed = true;
   }
 
@@ -387,6 +436,10 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
     exit_class: closed
       ? classifyExit(exitReason, finalPnlPercent, Boolean(position.partial_tp_done) || partialFired)
       : position.exit_class,
+    gross_pnl_pct: closed ? grossPnlPct : position.gross_pnl_pct,
+    net_pnl_pct: closed ? netPnlPct : position.net_pnl_pct,
+    exit_slippage_pct: closed ? exitSlippagePct : position.exit_slippage_pct,
+    liquidity_at_exit: closed ? liquidityAtExit : position.liquidity_at_exit,
     partialFired,
   };
 }
@@ -435,7 +488,7 @@ async function maybeUpdateReputation(result) {
   const pnl = result.pnl_percent ?? result.pnlPercent ?? 0;
   const symbol = result.symbol || short(result.mint);
 
-  const lossReasons = ['HARD_SL', 'SL', 'EMERGENCY_STOP', 'NUCLEAR_STOP', 'SL_RECOVERY', 'NUCLEAR_RECOVERY'];
+  const lossReasons = ['HARD_SL', 'SL', 'EMERGENCY_STOP', 'NUCLEAR_STOP', 'SL_RECOVERY', 'NUCLEAR_RECOVERY', 'LIQUIDITY_EMERGENCY'];
   if (result.exit_class === 'loss' && lossReasons.includes(result.exitReason)) {
     recordLoss(result.mint);
   }
