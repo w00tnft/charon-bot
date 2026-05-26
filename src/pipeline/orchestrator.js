@@ -11,8 +11,9 @@ import { createDryRunPosition, createLivePosition, canOpenMorePositions, openPos
 import { sendBatchReveal, sendTelegram, sendPositionOpen, sendTradeIntent } from '../telegram/send.js';
 import { candidateSummary } from '../telegram/format.js';
 import { createTradeIntent } from '../db/intents.js';
-import { refreshCandidateForExecution } from '../execution/positions.js';
+import { refreshCandidateForExecution, getPendingTxs } from '../execution/positions.js';
 import { executeLiveBuy } from '../execution/router.js';
+import { acquireLock, releaseLock } from '../utils/txLock.js';
 import { graduated } from '../signals/graduated.js';
 import { setDegenHandler } from '../signals/trending.js';
 import { setCandidateHandler } from '../signals/feeClaim.js';
@@ -203,8 +204,16 @@ export async function handleApprovedBuy(selectedRow, decision, batchId, rows = [
         return;
       }
     }
+    const dryLockKey = `buy:${freshSelectedRow.candidate.token.mint}`;
+    if (!acquireLock(dryLockKey, 'dry_buy')) {
+      console.log(`[txLock] dry-run buy already in progress for ${freshSelectedRow.candidate.token.mint} — skipping`);
+      return;
+    }
     console.log(`[agent] DRY-RUN opening $${sym2} — score: ${freshSelectedRow.candidate.safety?.score}/100, mcap: $${((freshSelectedRow.candidate.metrics?.marketCapUsd ?? 0) / 1000).toFixed(0)}k`);
-    const { id: positionId, isNew } = createDryRunPosition(freshSelectedRow.id, freshSelectedRow.candidate, decision, `llm_batch_${batchId}`);
+    let positionId, isNew;
+    try {
+    const result = createDryRunPosition(freshSelectedRow.id, freshSelectedRow.candidate, decision, `llm_batch_${batchId}`);
+    positionId = result.id; isNew = result.isNew;
     logDecisionEvent({
       batchId,
       triggerCandidateId,
@@ -217,6 +226,9 @@ export async function handleApprovedBuy(selectedRow, decision, batchId, rows = [
       execution: { positionId, isNew },
     });
     if (isNew) await sendPositionOpen(positionId);
+    } finally {
+      releaseLock(dryLockKey);
+    }
     return;
   }
 

@@ -4,7 +4,7 @@ import { initDb } from './db/connection.js';
 import { db } from './db/connection.js';
 import { initLiveExecution } from './liveExecutor.js';
 import { setupTelegram } from './telegram/commands.js';
-import { monitorPositions } from './execution/positions.js';
+import { monitorPositions, getPendingTxs } from './execution/positions.js';
 import { closeStuckPositions, recoverOpenPositions } from './db/positions.js';
 import { processCandidateFromSignals, maybeProcessDegenCandidate } from './pipeline/orchestrator.js';
 import { sendTelegram, probeTelegram } from './telegram/send.js';
@@ -278,6 +278,16 @@ export async function startCharon() {
   const posCheckMs = ACCELERATED_DRY_RUN ? POSITION_PRICE_CHECK_INTERVAL_MS : POSITION_CHECK_MS;
   const trackPositions = makeFailureTracker('position monitor', (msg) => sendTelegram(msg));
   addInterval(() => trackPositions(() => monitorPositions()), posCheckMs);
+
+  // Stuck tx monitor — logs any locks held longer than TX_TIMEOUT_MS / 2
+  const TX_TIMEOUT_MS = Number(process.env.TX_TIMEOUT_MS) || 30_000;
+  addInterval(() => {
+    const pending = getPendingTxs();
+    const stale = pending.filter(t => t.ageMs > TX_TIMEOUT_MS / 2);
+    if (stale.length > 0) {
+      console.warn(`[txLock] ${stale.length} potentially stuck tx(s): ${stale.map(t => `${t.key}(${Math.round(t.ageMs / 1000)}s)`).join(', ')}`);
+    }
+  }, 15_000);
 
   // Hourly maintenance
   const hourlyMaintenance = async () => {
