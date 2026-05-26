@@ -256,6 +256,9 @@ export function initDb() {
   ensureColumn('dry_run_positions', 'source', "TEXT DEFAULT 'webhook'");
   ensureColumn('dry_run_positions', 'filter_score', 'INTEGER DEFAULT 0');
   ensureColumn('dry_run_positions', 'signals_json', "TEXT DEFAULT '{}'")
+  ensureColumn('dry_run_positions', 'trail_active', 'INTEGER DEFAULT 0');
+  ensureColumn('dry_run_positions', 'trail_peak_price', 'REAL DEFAULT NULL');
+  ensureColumn('dry_run_positions', 'trail_activated_at_ms', 'INTEGER DEFAULT NULL');
   ensureColumn('decision_logs', 'strategy_id', 'TEXT');
 
   const weightInsert = db.prepare('INSERT OR IGNORE INTO route_weights (route, win_count, loss_count, avg_pnl_pct, weight, updated_at_ms) VALUES (?, 0, 0, 0, 1.0, ?)');

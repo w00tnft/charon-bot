@@ -244,11 +244,49 @@ export async function sendPartialExit(position, pnlPercent, partialExitSize, tra
   ].join('\n'));
 }
 
+export async function sendTrailActivated(position, activationPrice, pnlPercent, trailPct) {
+  const symbol = escapeHtml(position.symbol || short(position.mint));
+  const entryPrice = Number(position.entry_price || 0);
+  const trailStop = activationPrice * (1 - trailPct);
+  await sendTelegram([
+    `🚀 <b>TRAIL ACTIVATED</b> — $${symbol}`,
+    '',
+    `📥 Entry:      <b>${entryPrice > 0 ? '$' + entryPrice.toFixed(6) : '?'}</b>`,
+    `📍 Current:    <b>$${activationPrice.toFixed(6)} (+${pnlPercent.toFixed(1)}%)</b>`,
+    `🛑 Trail stop: <b>$${trailStop.toFixed(6)}</b> (−${(trailPct * 100).toFixed(0)}% from peak)`,
+    `Letting it run... 🚀`,
+  ].join('\n')).catch(() => {});
+}
+
 export async function sendPositionExit(position) {
   const label = position?.execution_mode === 'live' ? 'Live exit' : 'Dry-run exit';
   const reason = position.exitReason || position.exit_reason || '';
   const cls = position.exit_class || 'loss';
   const clsPrefix = cls === 'win' ? '🏆 WIN' : cls === 'neutral' ? '⚖️ NEUTRAL' : '💀 LOSS';
+
+  if (reason === 'TRAIL_STOP') {
+    const symbol = escapeHtml(position.symbol || short(position.mint));
+    const entryPrice = Number(position.entry_price || 0);
+    const peakPrice = Number(position.trail_peak_price || 0);
+    const exitPnl = Number(position.pnl_percent ?? position.pnlPercent ?? 0);
+    const peakPnl = entryPrice > 0 && peakPrice > 0
+      ? (peakPrice / entryPrice - 1) * 100
+      : null;
+    const fixedTpPct = strategyById(position.strategy_id)?.take_profit_pct ?? 25;
+    const lines = [
+      `🔔 <b>${clsPrefix} — Trail Stop (${label})</b>`,
+      '',
+      `🪙 Token: <b>$${symbol}</b>`,
+      `📋 CA: <code>${position.mint}</code>`,
+      '',
+      `📥 Entry:  <b>${entryPrice > 0 ? '$' + entryPrice.toFixed(6) : '?'}</b>`,
+      peakPnl !== null ? `📈 Peak:   <b>+${peakPnl.toFixed(1)}%</b>` : null,
+      `📤 Exit:   <b>${fmtPct(exitPnl)}</b>`,
+      `💰 Locked: <b>+${exitPnl.toFixed(1)}%</b> (vs fixed TP +${fixedTpPct}%)`,
+    ].filter(Boolean);
+    await sendTelegram(lines.join('\n'));
+    return;
+  }
 
   if (reason === 'TRAILING_STOP') {
     const symbol = escapeHtml(position.symbol || short(position.mint));

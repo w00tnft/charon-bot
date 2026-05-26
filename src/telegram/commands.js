@@ -299,6 +299,15 @@ export async function handleMessage(msg) {
       msg += `${e}: ${d.count}x | avg ${avg(d.pnl)}%\n`;
     }
 
+    const trailData = exits['TRAIL_STOP'];
+    if (trailData) {
+      const stratRow = db.prepare("SELECT config_json FROM strategies WHERE id='degen'").get();
+      const fixedTpPct = stratRow ? (JSON.parse(stratRow.config_json || '{}').take_profit_pct ?? 25) : 25;
+      const avgTrailPnl = Number(avg(trailData.pnl));
+      const bonus = (avgTrailPnl - fixedTpPct).toFixed(1);
+      msg += `\nTRAIL BONUS vs TP (+${fixedTpPct}%): ${bonus > 0 ? '+' : ''}${bonus}% avg extra captured\n`;
+    }
+
     msg += '\nBY ROUTE:\n';
     for (const [rt, d] of Object.entries(routes)) {
       const wr = ((d.wins / d.total) * 100).toFixed(0);

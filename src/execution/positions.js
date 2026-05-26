@@ -11,7 +11,7 @@ import { openPositions } from '../db/positions.js';
 import { updateCandidateSnapshot } from '../db/candidates.js';
 import { trending } from '../signals/trending.js';
 import { executeLiveSell } from './router.js';
-import { sendPositionExit, sendPartialExit, sendTelegram } from '../telegram/send.js';
+import { sendPositionExit, sendPartialExit, sendTelegram, sendTrailActivated } from '../telegram/send.js';
 import { blacklistToken, whitelistDeployer } from '../db/blacklist.js';
 import { escapeHtml, short } from '../format.js';
 import { autoRunLearning } from '../learning/commands.js';
@@ -114,7 +114,7 @@ export function classifyExit(exitReason, pnlPercent, partialDone) {
   const pnl = Number(pnlPercent || 0);
   if (reason === 'HARD_SL' || reason === 'SL' || pnl < 0) return 'loss';
   if (partialDone) return 'win';
-  if (reason === 'TRAILING_STOP' || reason === 'TP' || reason === 'TRAILING_TP') return pnl > 0 ? 'win' : 'loss';
+  if (reason === 'TRAIL_STOP' || reason === 'TRAILING_STOP' || reason === 'TP' || reason === 'TRAILING_TP') return pnl > 0 ? 'win' : 'loss';
   if (pnl >= 30) return 'win';
   if (pnl > 0) return 'neutral';
   return 'loss';
@@ -177,9 +177,45 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
       console.log(`[position] HARD STOP $${position.symbol} ${pnlPercent.toFixed(1)}% ❌`);
       exitReason = 'HARD_SL';
     }
-    if (!exitReason && pnlPercent >= tpPct) {
-      console.log(`[position] TP HIT $${position.symbol} +${pnlPercent.toFixed(1)}% ✅`);
-      exitReason = 'TP';
+    // ── Profit-lock trailing stop (replaces flat TP when TRAIL_ENABLED) ─────
+    const trailEnabled = process.env.TRAIL_ENABLED !== 'false';
+    const trailPct = Number(process.env.TRAIL_PCT) || 0.10;
+
+    if (!exitReason) {
+      if (!trailEnabled) {
+        if (pnlPercent >= tpPct) {
+          console.log(`[position] TP HIT $${position.symbol} +${pnlPercent.toFixed(1)}% ✅`);
+          exitReason = 'TP';
+        }
+      } else if (!position.trail_active) {
+        if (pnlPercent >= tpPct) {
+          const activationPrice = Number(asset?.usdPrice) || price;
+          db.prepare(`
+            UPDATE dry_run_positions
+            SET trail_active = 1, trail_peak_price = ?, trail_activated_at_ms = ?
+            WHERE id = ?
+          `).run(activationPrice, now(), position.id);
+          console.log(`[trail] $${position.symbol} ACTIVATED at +${pnlPercent.toFixed(1)}% — peak: ${activationPrice}`);
+          sendTrailActivated(position, activationPrice, pnlPercent, trailPct).catch(() => {});
+        }
+      } else {
+        const peakPrice = Number(position.trail_peak_price);
+        const livePrice = Number(asset?.usdPrice) || 0;
+        if (livePrice > 0 && peakPrice > 0) {
+          if (livePrice > peakPrice) {
+            db.prepare('UPDATE dry_run_positions SET trail_peak_price = ? WHERE id = ?').run(livePrice, position.id);
+            console.log(`[trail] $${position.symbol} new peak: ${livePrice} (+${pnlPercent.toFixed(1)}%)`);
+          } else {
+            const trailStop = peakPrice * (1 - trailPct);
+            if (livePrice <= trailStop) {
+              console.log(`[trail] $${position.symbol} TRAIL STOP hit — peak: ${peakPrice} exit: ${livePrice} (+${pnlPercent.toFixed(1)}%)`);
+              exitReason = 'TRAIL_STOP';
+            } else {
+              console.log(`[trail] $${position.symbol} holding — ${((livePrice / peakPrice - 1) * 100).toFixed(1)}% from peak`);
+            }
+          }
+        }
+      }
     }
 
   // ── New partial-exit + trailing-stop system ────────────────────────────────
