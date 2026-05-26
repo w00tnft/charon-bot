@@ -16,6 +16,10 @@ import { blacklistToken, whitelistDeployer } from '../db/blacklist.js';
 import { escapeHtml, short } from '../format.js';
 import { autoRunLearning } from '../learning/commands.js';
 import { recordLoss } from '../utils/mintCooldown.js';
+import { acquireLock, releaseLock, isLocked, getPendingTxs } from '../utils/txLock.js';
+import { verifyNoPosition } from '../utils/balanceCheck.js';
+
+export { getPendingTxs };
 
 export async function freshEntryMarket(mint, candidate) {
   const gmgn = await fetchGmgnTokenInfo(mint, false);
@@ -120,16 +124,24 @@ export function classifyExit(exitReason, pnlPercent, partialDone) {
   return 'loss';
 }
 
-const sellInProgress = new Set();
-
 async function doLiveSell(position, reason, price, mcap) {
-  if (sellInProgress.has(position.id)) return null;
-  sellInProgress.add(position.id);
+  const lockKey = `sell:${position.id}`;
+  if (!acquireLock(lockKey, 'sell')) {
+    console.log(`[txLock] sell already in progress for position ${position.id} (${position.symbol})`);
+    return null;
+  }
   try {
     return await executeLiveSell(position, reason);
   } finally {
-    sellInProgress.delete(position.id);
+    releaseLock(lockKey);
   }
+}
+
+async function simulateTxDelay() {
+  if (process.env.SIMULATE_TX_DELAYS === 'false') return;
+  // simulate 400ms–2s network + confirmation latency
+  const delayMs = 400 + Math.random() * 1600;
+  await new Promise(r => setTimeout(r, delayMs));
 }
 
 const PANIC_EXIT_REASONS = new Set(['HARD_SL', 'EMERGENCY_STOP', 'NUCLEAR_STOP', 'SL_RECOVERY', 'NUCLEAR_RECOVERY', 'LIQUIDITY_EMERGENCY']);
