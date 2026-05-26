@@ -138,10 +138,17 @@ async function doLiveSell(position, reason, price, mcap) {
 }
 
 async function simulateTxDelay() {
-  if (process.env.SIMULATE_TX_DELAYS === 'false') return;
-  // simulate 400ms–2s network + confirmation latency
-  const delayMs = 400 + Math.random() * 1600;
+  if (process.env.SIMULATE_TX_DELAYS === 'false') return { success: true };
+  const base = 400 + Math.random() * 2600;
+  const congested = Math.random() < 0.10;
+  const delayMs = congested ? base + 5000 + Math.random() * 25000 : base;
+  if (congested) console.log(`[sim] tx congestion delay: ${Math.round(delayMs / 1000)}s`);
   await new Promise(r => setTimeout(r, delayMs));
+  if (Math.random() < 0.02) {
+    console.log('[sim] tx DROPPED (simulated)');
+    return { success: false, signature: null };
+  }
+  return { success: true, signature: `sim_${Date.now()}_${Math.random().toString(36).slice(2)}` };
 }
 
 const PANIC_EXIT_REASONS = new Set(['HARD_SL', 'EMERGENCY_STOP', 'NUCLEAR_STOP', 'SL_RECOVERY', 'NUCLEAR_RECOVERY', 'LIQUIDITY_EMERGENCY']);

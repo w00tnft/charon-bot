@@ -279,13 +279,18 @@ export async function startCharon() {
   const trackPositions = makeFailureTracker('position monitor', (msg) => sendTelegram(msg));
   addInterval(() => trackPositions(() => monitorPositions()), posCheckMs);
 
-  // Stuck tx monitor — logs any locks held longer than TX_TIMEOUT_MS / 2
+  // Stuck tx monitor — logs and alerts on locks held too long
   const TX_TIMEOUT_MS = Number(process.env.TX_TIMEOUT_MS) || 30_000;
-  addInterval(() => {
+  addInterval(async () => {
     const pending = getPendingTxs();
-    const stale = pending.filter(t => t.ageMs > TX_TIMEOUT_MS / 2);
-    if (stale.length > 0) {
-      console.warn(`[txLock] ${stale.length} potentially stuck tx(s): ${stale.map(t => `${t.key}(${Math.round(t.ageMs / 1000)}s)`).join(', ')}`);
+    if (!pending.length) return;
+    console.log(`[txLock] ${pending.length} pending tx(s):`);
+    for (const tx of pending) {
+      console.log(`  ${tx.key} (${tx.type}) — ${tx.ageMs}ms`);
+      if (tx.ageMs > TX_TIMEOUT_MS * 2) {
+        console.warn(`  WARNING: tx stuck for ${tx.ageMs}ms`);
+        await sendTelegram(`STUCK TX: ${tx.key} pending ${Math.round(tx.ageMs / 1000)}s`).catch(() => {});
+      }
     }
   }, 15_000);
 
