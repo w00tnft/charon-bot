@@ -10,8 +10,8 @@ const MIN_VOLUME_MCAP_RATIO = Number(process.env.FILTER_MIN_VOLUME_MCAP_RATIO ||
 const MIN_BUY_SELL_RATIO    = Number(process.env.FILTER_MIN_BUY_SELL_RATIO    || 1.4);
 const MIN_MOMENTUM_SIGNALS  = Number(process.env.FILTER_MIN_MOMENTUM_SIGNALS  || 3);
 const MAX_SLIPPAGE_PCT      = Number(process.env.FILTER_MAX_SLIPPAGE_PCT      || 2.0);
-const FILTER_MCAP_MIN       = Number(process.env.FILTER_MCAP_MIN_USD || 500_000);
-const FILTER_MCAP_MAX       = Number(process.env.FILTER_MCAP_MAX_USD || 5_000_000);
+const FILTER_MCAP_MIN       = Number(process.env.FILTER_MIN_MCAP) || 10_000;
+const FILTER_MCAP_MAX       = Number(process.env.FILTER_MAX_MCAP) || 700_000;
 
 // Filter pass/fail tracker for Telegram /filterstat
 let filterStats = {
