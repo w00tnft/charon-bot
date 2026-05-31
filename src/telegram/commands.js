@@ -377,9 +377,9 @@ export async function handleMessage(msg) {
 
     const statsAll = db.prepare(`
       SELECT COUNT(*) AS total,
-        SUM(CASE WHEN exit_class = 'win' THEN 1 ELSE 0 END) AS wins,
-        SUM(CASE WHEN exit_class = 'loss' THEN 1 ELSE 0 END) AS losses,
-        SUM(CASE WHEN exit_class = 'neutral' THEN 1 ELSE 0 END) AS neutrals,
+        SUM(CASE WHEN pnl_percent > 0 THEN 1 ELSE 0 END) AS wins,
+        SUM(CASE WHEN pnl_percent < 0 THEN 1 ELSE 0 END) AS losses,
+        SUM(CASE WHEN pnl_percent = 0 THEN 1 ELSE 0 END) AS neutrals,
         ROUND(AVG(pnl_percent), 2) AS avg_pnl,
         COALESCE(SUM(pnl_sol), 0) AS total_pnl_sol
       FROM dry_run_positions WHERE status = 'closed' AND (source != 'backtest' OR source IS NULL)
@@ -387,37 +387,43 @@ export async function handleMessage(msg) {
 
     const stats24h = db.prepare(`
       SELECT COUNT(*) AS total,
-        SUM(CASE WHEN exit_class = 'win' THEN 1 ELSE 0 END) AS wins,
+        SUM(CASE WHEN pnl_percent > 0 THEN 1 ELSE 0 END) AS wins,
+        SUM(CASE WHEN pnl_percent < 0 THEN 1 ELSE 0 END) AS losses,
         ROUND(AVG(pnl_percent), 2) AS avg_pnl
       FROM dry_run_positions WHERE status = 'closed' AND closed_at_ms > ? AND (source != 'backtest' OR source IS NULL)
     `).get(dayAgo);
 
     const statsWeek = db.prepare(`
       SELECT COUNT(*) AS total,
-        SUM(CASE WHEN exit_class = 'win' THEN 1 ELSE 0 END) AS wins
+        SUM(CASE WHEN pnl_percent > 0 THEN 1 ELSE 0 END) AS wins,
+        SUM(CASE WHEN pnl_percent < 0 THEN 1 ELSE 0 END) AS losses
       FROM dry_run_positions WHERE status = 'closed' AND closed_at_ms > ? AND (source != 'backtest' OR source IS NULL)
     `).get(weekAgo);
 
     const statsPivot = pivot ? db.prepare(`
       SELECT COUNT(*) AS total,
-        SUM(CASE WHEN exit_class = 'win' THEN 1 ELSE 0 END) AS wins,
-        SUM(CASE WHEN exit_class = 'loss' THEN 1 ELSE 0 END) AS losses,
-        SUM(CASE WHEN exit_class = 'neutral' THEN 1 ELSE 0 END) AS neutrals,
+        SUM(CASE WHEN pnl_percent > 0 THEN 1 ELSE 0 END) AS wins,
+        SUM(CASE WHEN pnl_percent < 0 THEN 1 ELSE 0 END) AS losses,
+        SUM(CASE WHEN pnl_percent = 0 THEN 1 ELSE 0 END) AS neutrals,
         ROUND(AVG(pnl_percent), 2) AS avg_pnl,
         COALESCE(SUM(pnl_sol), 0) AS total_pnl_sol
       FROM dry_run_positions WHERE status = 'closed' AND (source != 'backtest' OR source IS NULL) AND closed_at_ms > ?
     `).get(pivot) : null;
 
     const totalTrades = statsAll?.total || 0;
-    const winRate = totalTrades > 0 ? Math.round((statsAll.wins / totalTrades) * 100) : null;
+    const decisive = (statsAll?.wins || 0) + (statsAll?.losses || 0);
+    const winRate = decisive > 0 ? Math.round((statsAll.wins / decisive) * 100) : null;
     const dailyTrades = stats24h?.total || 0;
     const daysTo50 = dailyTrades > 0 ? Math.ceil((50 - totalTrades) / dailyTrades) : null;
-    const wr24h = stats24h?.total > 0 ? Math.round((stats24h.wins / stats24h.total) * 100) : null;
-    const wrWeek = statsWeek?.total > 0 ? Math.round((statsWeek.wins / statsWeek.total) * 100) : null;
+    const decisive24h = (stats24h?.wins || 0) + (stats24h?.losses || 0);
+    const wr24h = decisive24h > 0 ? Math.round((stats24h.wins / decisive24h) * 100) : null;
+    const decisiveWeek = (statsWeek?.wins || 0) + (statsWeek?.losses || 0);
+    const wrWeek = decisiveWeek > 0 ? Math.round((statsWeek.wins / decisiveWeek) * 100) : null;
 
     const routeBreakdown = db.prepare(`
       SELECT signal_route, COUNT(*) AS c,
-        SUM(CASE WHEN exit_class = 'win' THEN 1 ELSE 0 END) AS w,
+        SUM(CASE WHEN pnl_percent > 0 THEN 1 ELSE 0 END) AS w,
+        SUM(CASE WHEN pnl_percent < 0 THEN 1 ELSE 0 END) AS l,
         ROUND(AVG(pnl_percent), 1) AS avg_pnl
       FROM dry_run_positions
       WHERE status = 'closed' AND (source != 'backtest' OR source IS NULL) AND signal_route IS NOT NULL
@@ -425,7 +431,8 @@ export async function handleMessage(msg) {
     `).all();
 
     const routeLines = routeBreakdown.map(r => {
-      const wr = r.c > 0 ? Math.round(r.w / r.c * 100) : 0;
+      const decisive = (r.w || 0) + (r.l || 0);
+      const wr = decisive > 0 ? Math.round(r.w / decisive * 100) : 0;
       return `▸ ${escapeHtml(r.signal_route)}: ${r.c} trades | ${wr}% win | ${r.avg_pnl > 0 ? '+' : ''}${r.avg_pnl}% avg`;
     });
 
@@ -436,7 +443,7 @@ export async function handleMessage(msg) {
       '',
       `🔄 <b>SINCE PIVOT</b> (post mid-cap, ${new Date(pivot).toISOString().slice(0, 10)})`,
       `▸ Trades: <b>${statsPivot.total || 0}</b>`,
-      `▸ Win rate: <b>${statsPivot.total > 0 ? Math.round(statsPivot.wins / statsPivot.total * 100) + '%' : '—'}</b> (target: 48%)`,
+      `▸ Win rate: <b>${(statsPivot.wins + statsPivot.losses) > 0 ? Math.round(statsPivot.wins / (statsPivot.wins + statsPivot.losses) * 100) + '%' : '—'}</b> (target: 48%)`,
       `▸ W/L/N: <b>${statsPivot.wins || 0}</b>/${statsPivot.losses || 0}/${statsPivot.neutrals || 0}`,
       `▸ Avg PnL: <b>${pFmt(statsPivot.avg_pnl)}</b>`,
       `▸ Total PnL: <b>${solFmt(statsPivot.total_pnl_sol)} SOL</b>`,
@@ -813,9 +820,9 @@ export async function sendSummary(chatId) {
     return bot.sendMessage(chatId, '📊 <b>Summary</b>\n\nNo closed positions yet.', { parse_mode: 'HTML' });
   }
   const total = closed.length;
-  const wins = closed.filter(p => (p.exit_class || (Number(p.pnl_percent || 0) > 0 ? 'win' : 'loss')) === 'win');
-  const neutrals = closed.filter(p => p.exit_class === 'neutral');
-  const losses = closed.filter(p => (p.exit_class || (Number(p.pnl_percent || 0) > 0 ? 'win' : 'loss')) === 'loss');
+  const wins = closed.filter(p => Number(p.pnl_percent) > 0);
+  const neutrals = closed.filter(p => Number(p.pnl_percent) === 0);
+  const losses = closed.filter(p => Number(p.pnl_percent) < 0);
   const netScore = wins.length - losses.length;
   const netIcon = netScore > 0 ? '✅' : netScore < 0 ? '⚠️' : '➡️';
   const avgPnl = closed.reduce((s, p) => s + Number(p.pnl_percent || 0), 0) / total;
@@ -852,13 +859,14 @@ export async function sendPnl(chatId, query = null) {
   }
 
   function calcStats(positions) {
-    const wins     = positions.filter(p => (p.exit_class || (Number(p.pnl_percent || 0) > 0 ? 'win' : 'loss')) === 'win');
-    const neutrals = positions.filter(p => p.exit_class === 'neutral');
-    const losses   = positions.filter(p => (p.exit_class || (Number(p.pnl_percent || 0) > 0 ? 'win' : 'loss')) === 'loss');
+    const wins     = positions.filter(p => Number(p.pnl_percent) > 0);
+    const neutrals = positions.filter(p => Number(p.pnl_percent) === 0);
+    const losses   = positions.filter(p => Number(p.pnl_percent) < 0);
     const total    = positions.length;
     const totalSol = positions.reduce((s, p) => s + Number(p.pnl_sol || 0), 0);
     const avgPnl   = total > 0 ? positions.reduce((s, p) => s + Number(p.pnl_percent || 0), 0) / total : null;
-    const winRate  = total > 0 ? Math.round(wins.length / total * 100) : null;
+    const decisive = wins.length + losses.length;
+    const winRate  = decisive > 0 ? Math.round(wins.length / decisive * 100) : null;
     const net      = wins.length - losses.length;
     return { wins, neutrals, losses, total, totalSol, avgPnl, winRate, net };
   }
@@ -871,11 +879,11 @@ export async function sendPnl(chatId, query = null) {
     let snap = {};
     try { snap = JSON.parse(pos.snapshot_json || '{}'); } catch { /* */ }
     const route = snap.candidate?.signals?.route || snap.candidate?.signals?.label || 'unknown';
-    const exitClass = pos.exit_class || (Number(pos.pnl_percent || 0) > 0 ? 'win' : 'loss');
+    const pnl = Number(pos.pnl_percent || 0);
     const row = byRoute.get(route) || { route, count: 0, wins: 0, neutrals: 0, pnlSum: 0 };
     row.count += 1;
-    row.wins += exitClass === 'win' ? 1 : 0;
-    row.neutrals += exitClass === 'neutral' ? 1 : 0;
+    row.wins += pnl > 0 ? 1 : 0;
+    row.neutrals += pnl === 0 ? 1 : 0;
     row.pnlSum += Number(pos.pnl_percent || 0);
     byRoute.set(route, row);
   }
